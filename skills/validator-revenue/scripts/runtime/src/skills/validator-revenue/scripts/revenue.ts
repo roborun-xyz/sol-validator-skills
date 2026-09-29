@@ -148,7 +148,48 @@ type MarinadeBondCosts = {
   hasBond: boolean;
   bondAccounts: MarinadeBondRecord[];
   paymentsByEpoch: Map<number, bigint>;
+  estimatesByEpoch: Map<number, MarinadeEstimate>;
 };
+
+type MarinadeEstimate = {
+  paymentSol: number;
+  effectiveBid: number;
+  activatedStakeSol: number;
+  source: string;
+};
+
+const MARINADE_SAM_URL = "https://scoring.marinade.finance/api/v1/scores/sam";
+
+// SAM's effectiveBid includes the auction's static and dynamic bid components.
+// It is already denominated in SOL per 1,000 SOL per epoch, not lamports.
+export function estimateMarinadePayment(
+  payload: unknown,
+  voteAccount: string,
+  epoch: number,
+): MarinadeEstimate {
+  if (!Array.isArray(payload)) {
+    throw new Error(`Invalid Marinade SAM data for epoch ${epoch}.`);
+  }
+  const matches = payload.filter(row => row?.voteAccount === voteAccount);
+  const row = matches[0];
+  const bid = row?.effectiveBid;
+  const stake = row?.values?.marinadeActivatedStakeSol;
+  if (
+    matches.length !== 1 || row?.epoch !== epoch ||
+    typeof bid !== "number" || !Number.isFinite(bid) || bid < 0 ||
+    typeof stake !== "number" || !Number.isFinite(stake) || stake < 0
+  ) {
+    throw new Error(`Cannot estimate Marinade payment: missing, ambiguous or invalid SAM bid/stake for epoch ${epoch}.`);
+  }
+  const paymentSol = roundSol(stake * bid / 1000);
+  if (!Number.isFinite(paymentSol)) throw new Error(`Invalid Marinade estimate for epoch ${epoch}.`);
+  return {
+    paymentSol,
+    effectiveBid: bid,
+    activatedStakeSol: stake,
+    source: `${MARINADE_SAM_URL}?epoch=${epoch}`,
+  };
+}
 
 type SvtHistoryRow = {
   validatorId: string;
@@ -199,6 +240,11 @@ type RevenueRow = {
   grossRevenueSol: number;
   votingFeeSol: number;
   marinadeBondPaymentSol: number;
+  marinadeBondEstimatedPaymentSol: number;
+  marinadeBondPaymentStatus: string;
+  marinadeEffectiveBid: number | null;
+  marinadeActivatedStakeSol: number | null;
+  marinadeEstimateSource: string;
   netRevenueSol: number;
   preCompLamportsPerKiloStake: number;
   blocksProduced: number;
@@ -789,14 +835,14 @@ async function fetchMarinadeBonds(
   });
 }
 
-async function fetchMarinadeBondCosts(
+export async function fetchMarinadeBondCosts(
   voteAccount: string,
   firstEpoch: number,
   lastEpoch: number,
 ): Promise<MarinadeBondCosts> {
   const bondAccounts = await fetchMarinadeBonds(voteAccount);
   if (bondAccounts.length === 0) {
-    return { hasBond: false, bondAccounts, paymentsByEpoch: new Map() };
+    return { hasBond: false, bondAccounts, paymentsByEpoch: new Map(), estimatesByEpoch: new Map() };
   }
 
   const payload = await fetchJson<MarinadeProtectedEventsResponse>(
@@ -820,7 +866,20 @@ async function fetchMarinadeBondCosts(
     );
   }
 
-  return { hasBond: true, bondAccounts, paymentsByEpoch };
+  const estimatesByEpoch = new Map<number, MarinadeEstimate>();
+  // Global Bidding publication is a proxy for availability, not proof that
+  // every validator has settled. PSR/DAO events alone do not establish it.
+  const biddingPublished = new Set(payload.protected_events
+    .filter(event => event.reason === "Bidding" && event.meta?.funder === "ValidatorBond")
+    .map(event => event.epoch));
+  if (bondAccounts.some(bond => bond.bond_type === "bidding")) {
+    for (let epoch = firstEpoch; epoch <= lastEpoch; epoch++) {
+      if (biddingPublished.has(epoch)) continue;
+      const sam = await fetchJson<unknown>(`${MARINADE_SAM_URL}?epoch=${epoch}`);
+      estimatesByEpoch.set(epoch, estimateMarinadePayment(sam, voteAccount, epoch));
+    }
+  }
+  return { hasBond: true, bondAccounts, paymentsByEpoch, estimatesByEpoch };
 }
 
 async function collectRows(
@@ -863,6 +922,7 @@ async function collectRows(
     const votingFee = toLamports(row.votingFee);
     const marinadeBondPayment =
       marinadeBondCosts.paymentsByEpoch.get(row.epoch) ?? 0n;
+    const marinadeEstimate = marinadeBondCosts.estimatesByEpoch.get(row.epoch);
     const bamBoostReward = bamBoostRewards.get(row.epoch);
     const bamBoostConversion = bamBoostConversions.get(row.epoch);
     const bamBoostClaim = bamBoostClaims.get(row.epoch);
@@ -881,7 +941,8 @@ async function collectRows(
     const netRevenueSol =
       grossRevenueSol -
       lamportsToSol(votingFee) -
-      lamportsToSol(marinadeBondPayment);
+      lamportsToSol(marinadeBondPayment) -
+      (marinadeEstimate?.paymentSol ?? 0);
     const stakeSol = stakeLamportsToSol(row.totalStake);
     const revenueBeforeComp = votingReward + commissionReward + jitoReward;
     const revenueBeforeCompSol =
@@ -929,6 +990,13 @@ async function collectRows(
       grossRevenueSol: roundSol(grossRevenueSol),
       votingFeeSol: roundSol(lamportsToSol(votingFee)),
       marinadeBondPaymentSol: roundSol(lamportsToSol(marinadeBondPayment)),
+      marinadeBondEstimatedPaymentSol: marinadeEstimate?.paymentSol ?? 0,
+      marinadeBondPaymentStatus: marinadeEstimate ? "estimated"
+        : marinadeBondCosts.paymentsByEpoch.has(row.epoch) ? "reported"
+        : marinadeBondCosts.hasBond ? "no_record" : "not_applicable",
+      marinadeEffectiveBid: marinadeEstimate?.effectiveBid ?? null,
+      marinadeActivatedStakeSol: marinadeEstimate?.activatedStakeSol ?? null,
+      marinadeEstimateSource: marinadeEstimate?.source ?? "",
       netRevenueSol: roundSol(netRevenueSol),
       preCompLamportsPerKiloStake: Math.round(preCompLamportsPerKiloStake),
       blocksProduced: Math.round(toNumber(row.leaderSlotsDone)),
@@ -947,7 +1015,7 @@ async function collectRows(
   };
 }
 
-function totals(rows: RevenueRow[]): RevenueRow {
+export function totals(rows: RevenueRow[]): RevenueRow {
   const total = rows.reduce(
     (acc, row) => {
       acc.stakeSol = row.stakeSol;
@@ -965,6 +1033,8 @@ function totals(rows: RevenueRow[]): RevenueRow {
       acc.grossRevenueSol += row.grossRevenueSol;
       acc.votingFeeSol += row.votingFeeSol;
       acc.marinadeBondPaymentSol += row.marinadeBondPaymentSol;
+      acc.marinadeBondEstimatedPaymentSol += row.marinadeBondEstimatedPaymentSol;
+      if (row.marinadeBondPaymentStatus === "estimated") acc.marinadeBondPaymentStatus = "estimated";
       acc.netRevenueSol += row.netRevenueSol;
       acc.preCompLamportsPerKiloStake += row.preCompLamportsPerKiloStake;
       acc.blocksProduced += row.blocksProduced;
@@ -999,6 +1069,11 @@ function totals(rows: RevenueRow[]): RevenueRow {
       grossRevenueSol: 0,
       votingFeeSol: 0,
       marinadeBondPaymentSol: 0,
+      marinadeBondEstimatedPaymentSol: 0,
+      marinadeBondPaymentStatus: "aggregate",
+      marinadeEffectiveBid: null,
+      marinadeActivatedStakeSol: null,
+      marinadeEstimateSource: "",
       netRevenueSol: 0,
       preCompLamportsPerKiloStake: 0,
       blocksProduced: 0,
@@ -1025,6 +1100,7 @@ function totals(rows: RevenueRow[]): RevenueRow {
     grossRevenueSol: roundSol(total.grossRevenueSol),
     votingFeeSol: roundSol(total.votingFeeSol),
     marinadeBondPaymentSol: roundSol(total.marinadeBondPaymentSol),
+    marinadeBondEstimatedPaymentSol: roundSol(total.marinadeBondEstimatedPaymentSol),
     netRevenueSol: roundSol(total.netRevenueSol),
   };
 }
@@ -1041,7 +1117,7 @@ function fmtInt(value: number): string {
   return Math.round(value).toLocaleString("en-US");
 }
 
-function renderMarkdown(result: {
+export function renderMarkdown(result: {
   voteAccount: string;
   currentEpoch: number;
   firstEpoch: number;
@@ -1060,7 +1136,7 @@ function renderMarkdown(result: {
   const jitoDefinition =
     "Jito operator revenue is calculated from Jito's official validator rewards as floor(mevRevenue × mevCommissionBps / 10,000). The raw JPool/SVT jitoReward inflow is retained for reconciliation only; any difference is excluded from gross and net because it can include returned Tip Distribution Account rent.";
   const revenueDefinition = result.hasMarinadeBond
-    ? "SOL revenue definition used: gross = votingReward + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - votingFee - marinadeBondPayment. Marinade bond payment is the sum of ValidatorBond-funded settlement amounts from Marinade protected-events for each epoch. This excludes other off-chain payments, infrastructure costs, and other operating costs."
+    ? "SOL revenue definition used: gross = votingReward + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - votingFee - reported Marinade bond payment - estimated Marinade payment. Reported payments sum ValidatorBond-funded protected-events. When an epoch has no published ValidatorBond-funded Bidding events globally, bidding-bond costs are estimated from that epoch's SAM effectiveBid × marinadeActivatedStakeSol / 1000. Estimates use auction snapshots, exclude additional penalties/PSR and can differ from final settlement. no_record means no matching published payment, not verified zero liability; global publication can be partial. This excludes other off-chain payments, infrastructure costs, and other operating costs."
     : "SOL revenue definition used: gross = votingReward + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - votingFee. No Marinade validator bond was found, so bond payments are not included. This excludes off-chain payments, infrastructure costs, and other operating costs.";
   const tableHeader = result.hasMarinadeBond
     ? "| Epoch | Stake SOL | Voting Reward | Commission | Jito Commission | Excluded SVT Jito Inflow | BAM Allocated JitoSOL | JitoSOL/SOL | BAM Allocated SOL Eq. | BAM Claimed SOL Eq. | BAM Status | Voting Comp | Gross SOL | Voting Fee | Marinade Bond Payment | Net SOL | Pre-Comp Lamports / 1k Stake | Blocks |"
@@ -1083,7 +1159,9 @@ function renderMarkdown(result: {
 
   for (const row of result.rows) {
     const bondCell = result.hasMarinadeBond
-      ? ` | ${fmtSol(row.marinadeBondPaymentSol)}`
+      ? row.marinadeBondPaymentStatus === "estimated"
+        ? ` | ${fmtSol(row.marinadeBondPaymentSol)} reported + ${fmtSol(row.marinadeBondEstimatedPaymentSol)} estimated`
+        : ` | ${fmtSol(row.marinadeBondPaymentSol)} (${row.marinadeBondPaymentStatus})`
       : "";
     const jitoCommission =
       row.jitoCommissionBps === null
@@ -1096,6 +1174,10 @@ function renderMarkdown(result: {
     lines.push(
       `| ${row.epoch} | ${fmtInt(row.stakeSol)} | ${fmtSol(row.votingRewardSol)} | ${fmtSol(row.commissionRewardSol)} | ${jitoCommission} | ${fmtSol(row.excludedSvtJitoInflowSol)} | ${fmtSol(row.bamBoostAllocatedJitoSol)} | ${bamRate} | ${fmtSol(row.bamBoostAllocatedSolEquivalent)} | ${fmtSol(row.bamBoostClaimedSolEquivalent)} | ${row.bamBoostClaimEpoch} ${row.bamBoostAllocationStatus}/${row.bamBoostClaimStatus} | ${fmtSol(row.votingCompensationSol)} | ${fmtSol(row.grossRevenueSol)} | ${fmtSol(row.votingFeeSol)}${bondCell} | ${fmtSol(row.netRevenueSol)} | ${fmtInt(row.preCompLamportsPerKiloStake)} | ${row.blocksProduced}/${row.leaderSlots} |`,
     );
+  }
+
+  for (const row of result.rows.filter(row => row.marinadeBondPaymentStatus === "estimated")) {
+    lines.push("", `Epoch ${row.epoch} Marinade estimate: ${row.marinadeActivatedStakeSol} SOL activated stake × effective bid ${row.marinadeEffectiveBid} (SOL per 1,000 SOL) / 1,000 = ${row.marinadeBondEstimatedPaymentSol} SOL. Source: ${row.marinadeEstimateSource}`);
   }
 
   lines.push(
@@ -1116,11 +1198,12 @@ function renderMarkdown(result: {
   if (result.hasMarinadeBond) {
     lines.push(
       `- Marinade bond payment: \`${fmtTotal(total.marinadeBondPaymentSol)} SOL\``,
+      `- Marinade estimated payment: \`${fmtTotal(total.marinadeBondEstimatedPaymentSol)} SOL\``,
     );
   }
 
   lines.push(
-    `- Net revenue: \`${fmtTotal(total.netRevenueSol)} SOL\``,
+    `- Net revenue${total.marinadeBondPaymentStatus === "estimated" ? " (includes estimated Marinade costs)" : ""}: \`${fmtTotal(total.netRevenueSol)} SOL\``,
     `- Lamports per 1k stake before voting comp (sum across window): \`${fmtInt(total.preCompLamportsPerKiloStake)}\``,
     `- Blocks produced: \`${fmtInt(total.blocksProduced)} / ${fmtInt(total.leaderSlots)}\` leader slots`,
   );
@@ -1128,7 +1211,7 @@ function renderMarkdown(result: {
   return lines.join("\n");
 }
 
-function renderCsv(rows: RevenueRow[], includeMarinadeBond: boolean): string {
+export function renderCsv(rows: RevenueRow[], includeMarinadeBond: boolean): string {
   const header = [
     "epoch",
     "stake_sol",
@@ -1156,7 +1239,7 @@ function renderCsv(rows: RevenueRow[], includeMarinadeBond: boolean): string {
     "voting_compensation_sol",
     "gross_revenue_sol",
     "voting_fee_sol",
-    ...(includeMarinadeBond ? ["marinade_bond_payment_sol"] : []),
+    ...(includeMarinadeBond ? ["marinade_bond_payment_sol", "marinade_bond_estimated_payment_sol", "marinade_bond_payment_status", "marinade_effective_bid", "marinade_activated_stake_sol", "marinade_estimate_source"] : []),
     "net_revenue_sol",
     "lamports_per_kilo_stake_before_voting_comp",
     "blocks",
@@ -1191,7 +1274,7 @@ function renderCsv(rows: RevenueRow[], includeMarinadeBond: boolean): string {
       row.votingCompensationSol.toFixed(9),
       row.grossRevenueSol.toFixed(9),
       row.votingFeeSol.toFixed(9),
-      ...(includeMarinadeBond ? [row.marinadeBondPaymentSol.toFixed(9)] : []),
+      ...(includeMarinadeBond ? [row.marinadeBondPaymentSol.toFixed(9), row.marinadeBondEstimatedPaymentSol.toFixed(9), row.marinadeBondPaymentStatus, row.marinadeEffectiveBid ?? "", row.marinadeActivatedStakeSol ?? "", row.marinadeEstimateSource] : []),
       row.netRevenueSol.toFixed(9),
       row.preCompLamportsPerKiloStake,
       row.blocksProduced,

@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC.
 metadata:
   created: "2026-05-27"
-  last_updated: "2026-09-25"
+  last_updated: "2026-09-28"
 ---
 
 # Validator Revenue
@@ -25,6 +25,10 @@ bun src/skills/validator-revenue/scripts/revenue.ts \
 Use `--validator <VOTE_OR_IDENTITY>` for identity resolution, `--include-current` only when requested, and `--format markdown|csv|json` for output.
 
 The helper uses the repository Helius mainnet RPC, JPool/SVT history, Trillium epoch-specific identity resolution, Jito's official validator rewards and JitoSOL/SOL ratio APIs, Jito's public BAM Boost Merkle distributions, and Marinade's validator-bonds API.
+
+For a Marinade bidding bond, when an epoch has no published `ValidatorBond`-funded `Bidding` events globally, estimate its pending bidding cost using that epoch's `https://scoring.marinade.finance/api/v1/scores/sam?epoch=N` row: `effectiveBid × values.marinadeActivatedStakeSol / 1000`. The API's effective bid is in SOL per 1,000 SOL per epoch and includes static/dynamic bid components; do not substitute configured CPMPE, target stake, total validator stake or another epoch's data, or add dynamic commissions a second time. Missing, duplicate, mismatched-epoch or invalid bid/stake data fails the estimate rather than becoming zero.
+
+Keep `marinadeBondPaymentSol` as published payments and report `marinadeBondEstimatedPaymentSol` separately; deduct both from net revenue. Preserve the estimate's bid, activated stake and source URL in output and label affected net totals as provisional. Replace the estimate with published Bidding costs on subsequent queries, never add both for the same bidding obligation. Global Bidding publication is only an availability proxy: `no_record` means no matching published payment, not a verified zero liability, and publication can be partial. Auction-snapshot estimates exclude additional penalties/PSR and may differ from final settlement; existing published non-bidding costs remain included. Do not apply the SAM formula to institutional-only bonds. See [Marinade settlement rules](https://docs.marinade.finance/marinade-protocol/protocol-overview/stake-auction-market/bonds-settlements).
 
 Calculate validator-operator Jito MEV revenue from Jito's official validator rewards as `floor(mev_revenue * mev_commission_bps / 10_000)`. Do not use JPool/SVT's raw `jitoReward` as revenue because that inflow can include returned Tip Distribution Account rent. Report the raw SVT inflow and excluded difference for reconciliation, but exclude the difference from gross and net revenue.
 
