@@ -1,39 +1,25 @@
 #!/usr/bin/env bun
 
+import { localIso } from "../../shared/time";
+
+import { fetchSvtHistory } from "../../shared/epoch-history";
+import { lamportsToSol, LAMPORTS_PER_SOL } from "../../shared/amounts";
+
 import { fetchJson, fetchOptionalJson } from "../../shared/http";
-import { rpcCall } from "../../shared/operator-config";
+import { rpcCall as rpc, resolveOperator } from "../../shared/operator-config";
 
-import { resolveOperator } from "../../shared/operator-config";
+import {
+  verifyBamBoostClaimStatusAccount,
+  deriveBamBoostClaimStatusAddress,
+  BAM_MERKLE_BASE as BAM_BOOST_MERKLE_BASE_URL,
+  JITOSOL_RATIO_URL as JITOSOL_SOL_RATIO_URL,
+  type RpcAccount,
+} from "../../shared/bam-accounts";
+export { verifyBamBoostClaimStatusAccount, deriveBamBoostClaimStatusAddress } from "../../shared/bam-accounts";
 
-import { verifyBamBoostClaimStatusAccount } from "../../shared/bam-accounts";
-export { verifyBamBoostClaimStatusAccount } from "../../shared/bam-accounts";
+import { parseEpochQueryArgs, EPOCH_QUERY_HELP, type EpochQueryOptions as Options } from "../../shared/cli";
 
-import { PublicKey } from "@solana/web3.js";
 
-type Format = "markdown" | "csv" | "json";
-
-type Options = {
-  config?: string;
-  profile?: string;
-  validator?: string;
-  voteAccount?: string;
-  epochs: number;
-  format: Format;
-  includeCurrent: boolean;
-  rpcUrl: string;
-};
-
-type RpcResponse<T> = {
-  jsonrpc: string;
-  id: number;
-  result?: T;
-  error?: { code: number; message: string };
-};
-
-type RpcAccount = {
-  data: [string, string];
-  owner: string;
-};
 
 type TrilliumRow = {
   identity_pubkey?: string;
@@ -114,10 +100,6 @@ type JitoCommissionReward = {
   commissionBps: number | null;
   operatorCommission: bigint;
   status: JitoCommissionRewardStatus;
-};
-
-type SvtHistoryResponse = {
-  data: SvtHistoryRow[];
 };
 
 type MarinadeBondsResponse = {
@@ -252,96 +234,25 @@ type RevenueRow = {
   skipRate: string;
 };
 
-const LAMPORTS_PER_SOL = 1_000_000_000;
 const TRILLIUM_BASE_URL = "https://api.trillium.so/validator_rewards";
-const SVT_HISTORY_URL =
-  "https://api.validators.svt.one/validators-history/history";
+
 const JITO_VALIDATOR_HISTORY_BASE_URL =
   "https://kobe.mainnet.jito.network/api/v1/validators";
-const JITOSOL_SOL_RATIO_URL =
-  "https://kobe.mainnet.jito.network/api/v1/jitosol_sol_ratio";
+
 const MARINADE_BONDS_BASE_URL = "https://validator-bonds-api.marinade.finance";
-const BAM_BOOST_MERKLE_BASE_URL =
-  "https://storage.googleapis.com/jito-bam-boost/mainnet";
-const BAM_BOOST_PROGRAM = new PublicKey(
-  "BoostxbPp2ENYHGcTLYt1obpcY13HE4NojdqNWdzqSSb",
-);
-const JITOSOL_MINT = new PublicKey(
-  "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn",
-);
+
 const MARINADE_BOND_TYPES = ["bidding", "institutional"] as const;
 const BASIS_POINTS_DENOMINATOR = 10_000n;
-const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 function usage(): never {
   console.log(`Usage:
   bun src/skills/validator-revenue/scripts/revenue.ts --vote-account <VOTE_ACCOUNT> [--epochs 30]
   bun src/skills/validator-revenue/scripts/revenue.ts --validator <VOTE_OR_IDENTITY> [--epochs 30]
 
-Options:
-  --vote-account <pubkey>       Mainnet vote account to query
-  --validator <pubkey>          Vote account or identity pubkey
-  --epochs <n>                  Number of completed epochs to fetch (default: 30)
-  --include-current             Include current in-progress epoch instead of only completed epochs
-  --format <markdown|csv|json>  Output format (default: markdown)
-  --rpc <url>                   Helius mainnet RPC URL (default: SOLANA_RPC_URL or saved profile URL)
-  --config <path>              Local operator configuration
-  --profile <name>             Configured validator profile
-  --help                        Show this help text
+${EPOCH_QUERY_HELP}
 `);
   process.exit(0);
 }
-
-function parseArgs(argv: string[]): Options {
-  const opts: Options = {
-    epochs: 30,
-    format: "markdown",
-    includeCurrent: false,
-    rpcUrl: "",
-  };
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    const next = () => {
-      const value = argv[++i];
-      if (!value) throw new Error(`Missing value for ${arg}`);
-      return value;
-    };
-
-    if (arg === "--help" || arg === "-h") usage();
-    else if (arg === "--vote-account") opts.voteAccount = next();
-    else if (arg === "--validator") opts.validator = next();
-    else if (arg === "--epochs" || arg === "-n")
-      opts.epochs = parsePositiveInt(next(), "--epochs");
-    else if (arg === "--format") opts.format = parseFormat(next());
-    else if (arg === "--include-current") opts.includeCurrent = true;
-    else if (arg === "--rpc") opts.rpcUrl = next();
-    else if (arg === "--config") opts.config = next();
-    else if (arg === "--profile") opts.profile = next();
-    else if (!arg.startsWith("-") && !opts.validator && !opts.voteAccount)
-      opts.validator = arg;
-    else throw new Error(`Unknown argument: ${arg}`);
-  }
-
-  return opts;
-}
-
-function parsePositiveInt(value: string, name: string): number {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1)
-    throw new Error(`${name} must be a positive integer.`);
-  return parsed;
-}
-
-function parseFormat(value: string): Format {
-  if (value === "markdown" || value === "csv" || value === "json") return value;
-  throw new Error("--format must be markdown, csv, or json.");
-}
-
-async function rpc<T>(rpcUrl: string, method: string, params: unknown[] = []): Promise<T> {
-  return rpcCall(rpcUrl, method, params);
-}
-
 
 function toNumber(value: unknown, fallback = 0): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -366,61 +277,12 @@ function toLamports(value: string | number | undefined): bigint {
   return BigInt(trimmed);
 }
 
-function lamportsToSol(value: bigint): number {
-  return Number(value) / LAMPORTS_PER_SOL;
-}
-
 function stakeLamportsToSol(value: string | number | undefined): number {
   return lamportsToSol(toLamports(value));
 }
 
 function roundSol(value: number): number {
   return Number(value.toFixed(9));
-}
-
-function utcIsoToShanghai(isoTimestamp: string): string {
-  const timestamp = Date.parse(isoTimestamp);
-  if (!Number.isFinite(timestamp)) {
-    throw new Error(`Invalid UTC timestamp '${isoTimestamp}'.`);
-  }
-  return new Date(timestamp + 8 * 60 * 60 * 1000)
-    .toISOString()
-    .replace("Z", "+08:00");
-}
-
-async function fetchSvtHistory(
-  voteAccount: string,
-  firstEpoch: number,
-  lastEpoch: number,
-  epochCount: number,
-): Promise<SvtHistoryRow[]> {
-  const params = new URLSearchParams({
-    network: "mainnet",
-    vote_id: voteAccount,
-    epoch_count: String(epochCount),
-    epoch_from: String(lastEpoch),
-  });
-  const payload = await fetchJson<SvtHistoryResponse>(
-    `${SVT_HISTORY_URL}?${params}`,
-  );
-  if (!Array.isArray(payload.data)) {
-    throw new Error("JPool/SVT history response did not include a data array.");
-  }
-
-  const rows = payload.data
-    .filter((row) => row.epoch >= firstEpoch && row.epoch <= lastEpoch)
-    .sort((a, b) => a.epoch - b.epoch);
-  const epochs = new Set(rows.map((row) => row.epoch));
-  const missing = [];
-  for (let epoch = firstEpoch; epoch <= lastEpoch; epoch++) {
-    if (!epochs.has(epoch)) missing.push(epoch);
-  }
-  if (missing.length > 0) {
-    throw new Error(
-      `JPool/SVT history missing epoch(s): ${missing.join(", ")}.`,
-    );
-  }
-  return rows;
 }
 
 async function fetchJitoCommissionRewards(
@@ -562,36 +424,6 @@ async function fetchBamBoostRewards(
 
   return new Map(rewards.map((reward) => [reward.earningEpoch, reward]));
 }
-
-function u64Le(value: number): Buffer {
-  const buffer = Buffer.alloc(8);
-  buffer.writeBigUInt64LE(BigInt(value));
-  return buffer;
-}
-
-function deriveBamBoostDistributor(claimEpoch: number): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [
-      Buffer.from("merkle_distributor"),
-      JITOSOL_MINT.toBuffer(),
-      u64Le(claimEpoch),
-    ],
-    BAM_BOOST_PROGRAM,
-  )[0];
-}
-
-export function deriveBamBoostClaimStatusAddress(
-  identityAccount: string,
-  claimEpoch: number,
-): string {
-  const identity = new PublicKey(identityAccount);
-  const distributor = deriveBamBoostDistributor(claimEpoch);
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("claim_status"), identity.toBuffer(), distributor.toBuffer()],
-    BAM_BOOST_PROGRAM,
-  )[0].toBase58();
-}
-
 
 async function fetchBamBoostClaims(
   rpcUrl: string,
@@ -805,7 +637,7 @@ async function fetchBamBoostConversions(
       claimEpoch: reward.claimEpoch,
       jitoSolToSolRate: ratio.data,
       rateTimestampUtc: ratio.date,
-      rateTimestampLocal: utcIsoToShanghai(ratio.date),
+      rateTimestampLocal: localIso(new Date(ratio.date)),
       rewardSol: roundSol(lamportsToSol(reward.amount) * ratio.data),
       status: "converted",
     });
@@ -900,7 +732,7 @@ async function collectRows(
 
   const [svtRows, marinadeBondCosts, bamBoostRewards, jitoCommissionRewards] =
     await Promise.all([
-      fetchSvtHistory(voteAccount, firstEpoch, lastEpoch, opts.epochs),
+      fetchSvtHistory<SvtHistoryRow>(voteAccount, firstEpoch, lastEpoch, opts.epochs),
       fetchMarinadeBondCosts(voteAccount, firstEpoch, lastEpoch),
       fetchBamBoostRewards(voteAccount, firstEpoch, lastEpoch),
       fetchJitoCommissionRewards(voteAccount, firstEpoch, lastEpoch),
@@ -949,7 +781,7 @@ async function collectRows(
       lamportsToSol(revenueBeforeComp) + bamBoostConversion.rewardSol;
     const preCompLamportsPerKiloStake =
       stakeSol > 0
-        ? (revenueBeforeCompSol * LAMPORTS_PER_SOL * 1000) / stakeSol
+        ? (revenueBeforeCompSol * Number(LAMPORTS_PER_SOL) * 1000) / stakeSol
         : 0;
 
     return {
@@ -1286,7 +1118,7 @@ export function renderCsv(rows: RevenueRow[], includeMarinadeBond: boolean): str
 }
 
 async function main() {
-  const opts = parseArgs(Bun.argv.slice(2));
+  const opts = parseEpochQueryArgs(Bun.argv.slice(2), usage);
   const operator = await resolveOperator(opts);
   opts.rpcUrl = operator.rpcUrl;
   opts.voteAccount = operator.voteAccount;

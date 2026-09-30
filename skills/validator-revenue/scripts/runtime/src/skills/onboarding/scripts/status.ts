@@ -44,10 +44,14 @@ export async function configurationStatus(config?: string, fleet?: string, hosts
         hostFile.detail += ' Missing created/last_updated date fields.';
     } catch { hostFile.status = 'unreadable'; }
   }
+  const rpcStatus = Object.fromEntries(Object.keys(validated.profiles).map(name => {
+    try { return [name, {configured:true, source:selectRpc({profile:name}, validated).rpcSource}]; }
+    catch { return [name, {configured:false, source:'unavailable'}]; }
+  }));
   return { configPath: profiles.path, version: validated.version, defaultProfile: validated.defaultProfile,
     profiles: Object.fromEntries(Object.entries(validated.profiles).map(([name, p]) => [name, {cluster:p.cluster, identity:p.identity, voteAccount:p.voteAccount, verification:p.verification}])),
-    rpcConfigured: Object.fromEntries(Object.entries(validated.profiles).map(([name, profile]) => [name, (() => { try { selectRpc({profile:name}, validated); return true; } catch { return false; } })()])),
-    rpcSource: Object.fromEntries(Object.keys(validated.profiles).map(name => { try { return [name, selectRpc({profile:name}, validated).rpcSource]; } catch { return [name, 'unavailable']; } })),
+    rpcConfigured: Object.fromEntries(Object.entries(rpcStatus).map(([name, status]) => [name, status.configured])),
+    rpcSource: Object.fromEntries(Object.entries(rpcStatus).map(([name, status]) => [name, status.source])),
     files: {profiles, fleet: fleetFile, hosts: hostFile},
     verification: 'Local configuration checks only; no network or host verification. Missing files block only workflows that need them.' };
 }

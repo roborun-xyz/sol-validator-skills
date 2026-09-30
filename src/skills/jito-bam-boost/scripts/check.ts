@@ -1,31 +1,35 @@
 #!/usr/bin/env bun
 
-import { rpcCall, resolveOperator, readConfig, selectInput, type Input } from "../../shared/operator-config.ts";
+import { fetchResponse } from "../../shared/http";
 
-import { verifyBamBoostClaimStatusAccount } from "../../shared/bam-accounts";
+import { localIso } from "../../shared/time";
+
+import {
+  rpcCall,
+  resolveOperator,
+  readConfig,
+  selectInput,
+  type Input,
+  type RpcCaller,
+  MAINNET_GENESIS,
+  rpcOptions,
+} from "../../shared/operator-config.ts";
+
+import {
+  verifyBamBoostClaimStatusAccount,
+  BAM_BOOST_PROGRAM as BAM_PROGRAM,
+  JITOSOL_MINT,
+  TOKEN_PROGRAM,
+  BAM_MERKLE_BASE as GCS_MERKLE_BASE,
+  JITOSOL_RATIO_URL,
+  deriveBamBoostAddresses as deriveAddresses,
+  deriveAssociatedJitoSolAddress as deriveAssociatedTokenAddress,
+} from "../../shared/bam-accounts";
 
 import { PublicKey } from "@solana/web3.js";
 
-const BAM_PROGRAM = new PublicKey(
-  "BoostxbPp2ENYHGcTLYt1obpcY13HE4NojdqNWdzqSSb",
-);
-const JITOSOL_MINT = new PublicKey(
-  "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn",
-);
-const TOKEN_PROGRAM = new PublicKey(
-  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-);
-const ASSOCIATED_TOKEN_PROGRAM = new PublicKey(
-  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
-);
-const MAINNET_GENESIS_HASH =
-  "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
 const GCS_LIST_URL =
   "https://storage.googleapis.com/storage/v1/b/jito-bam-boost/o";
-const GCS_MERKLE_BASE =
-  "https://storage.googleapis.com/jito-bam-boost/mainnet";
-const JITOSOL_RATIO_URL =
-  "https://kobe.mainnet.jito.network/api/v1/jitosol_sol_ratio";
 export type AllocationStatus = "claimable" | "claimed" | "unfunded";
 
 export type BamAllocation = {
@@ -85,50 +89,7 @@ type RpcAccount = {
 
 type MerkleEntry = { pubkey?: unknown; amount?: unknown };
 
-function localIso(date: Date): string {
-  const text = new Intl.DateTimeFormat("sv-SE", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(date);
-  return `${text.replace(" ", "T")}+08:00`;
-}
-
-function u64Le(value: number): Buffer {
-  const buffer = Buffer.alloc(8);
-  buffer.writeBigUInt64LE(BigInt(value));
-  return buffer;
-}
-
-function deriveAssociatedTokenAddress(owner: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [owner.toBuffer(), TOKEN_PROGRAM.toBuffer(), JITOSOL_MINT.toBuffer()],
-    ASSOCIATED_TOKEN_PROGRAM,
-  )[0];
-}
-
-function deriveAddresses(identity: PublicKey, epoch: number) {
-  const distributor = PublicKey.findProgramAddressSync(
-    [Buffer.from("merkle_distributor"), JITOSOL_MINT.toBuffer(), u64Le(epoch)],
-    BAM_PROGRAM,
-  )[0];
-  const claimStatus = PublicKey.findProgramAddressSync(
-    [Buffer.from("claim_status"), identity.toBuffer(), distributor.toBuffer()],
-    BAM_PROGRAM,
-  )[0];
-  return {
-    distributor,
-    claimStatus,
-    distributorTokenAccount: deriveAssociatedTokenAddress(distributor),
-  };
-}
-
-export async function resolveBamTarget(options: Pick<CheckOptions, 'identity' | 'profile' | 'config' | 'rpcUrl'>, call = rpcCall) {
+export async function resolveBamTarget(options: Pick<CheckOptions, 'identity' | 'profile' | 'config' | 'rpcUrl'>, call: RpcCaller = rpcCall) {
   if (options.identity) {
     // Explicit historical claimants need not remain an active validator today.
     const identity = new PublicKey(options.identity).toBase58();
@@ -147,7 +108,7 @@ async function listPublishedEpochs(): Promise<number[]> {
     url.searchParams.set("delimiter", "/");
     url.searchParams.set("maxResults", "1000");
     if (pageToken) url.searchParams.set("pageToken", pageToken);
-    const response = await fetch(url, {signal: AbortSignal.timeout(20000)});
+    const response = await fetchResponse(url);
     if (!response.ok) {
       throw new Error(`Jito BAM epoch listing returned HTTP ${response.status}`);
     }
@@ -188,7 +149,7 @@ async function findAllocations(identity: PublicKey, epochs: number[]) {
   const identityText = identity.toBase58();
   const values = await mapLimit(epochs, 12, async (claimEpoch) => {
     const url = `${GCS_MERKLE_BASE}/${claimEpoch}/merkle_tree.json`;
-    const response = await fetch(url, {signal: AbortSignal.timeout(20000)});
+    const response = await fetchResponse(url);
     if (!response.ok) {
       throw new Error(
         `Jito BAM Merkle tree for claim epoch ${claimEpoch} returned HTTP ${response.status}`,
@@ -250,9 +211,8 @@ async function latestJitoSolRatio() {
   const now = new Date();
   const start = new Date(now.getTime() - 7 * 86_400_000).toISOString();
   const end = new Date(now.getTime() + 86_400_000).toISOString();
-  const response = await fetch(JITOSOL_RATIO_URL, {
+  const response = await fetchResponse(JITOSOL_RATIO_URL, {
     method: "POST",
-    signal: AbortSignal.timeout(20000),
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ range_filter: { start, end } }),
   });
@@ -281,7 +241,7 @@ export async function checkBamBoost(
     rpcCall(target.rpcUrl, "getEpochInfo", [{ commitment: "finalized" }]),
     listPublishedEpochs(),
   ]);
-  if (genesisHash !== MAINNET_GENESIS_HASH) {
+  if (genesisHash !== MAINNET_GENESIS) {
     throw new Error(`RPC genesis hash ${genesisHash} is not Solana mainnet-beta`);
   }
 
@@ -427,6 +387,7 @@ function usage(code = 2): never {
 
 Options:
   --claim-epoch <N>       Check one claim distributor epoch
+  --rpc <URL>            Helius RPC override
   --from-epoch <N>        Restrict the published claim epoch range
   --to-epoch <N>          Restrict the published claim epoch range
   --format markdown|json  Output format (default: markdown)`);
@@ -437,8 +398,6 @@ if (import.meta.main) {
   try {
     const args = process.argv.slice(2);
     let identity = "";
-    let profile: string | undefined;
-    let config: string | undefined;
     let claimEpoch: number | undefined;
     let fromEpoch: number | undefined;
     let toEpoch: number | undefined;
@@ -446,10 +405,8 @@ if (import.meta.main) {
     for (let index = 0; index < args.length; index++) {
       const arg = args[index];
       const next = args[index + 1];
-      if (arg === "--profile" && next) {
-        profile = next; index++;
-      } else if (arg === "--config" && next) {
-        config = next; index++;
+      if (['--rpc','--config','--profile'].includes(arg) && next && !next.startsWith('--')) {
+        index++;
       } else if (arg === "--identity" && next) {
         identity = next;
         index++;
@@ -474,8 +431,7 @@ if (import.meta.main) {
     if (!["markdown", "json"].includes(format)) usage();
     const result = await checkBamBoost({
       identity: identity || undefined,
-      profile,
-      config,
+      ...rpcOptions(args),
       claimEpoch,
       fromEpoch,
       toEpoch,

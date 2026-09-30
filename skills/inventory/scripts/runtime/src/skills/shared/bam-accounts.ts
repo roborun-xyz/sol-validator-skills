@@ -1,7 +1,36 @@
 import { PublicKey } from "@solana/web3.js";
 
-type RpcAccount = { data: [string, string]; owner: string };
-const BAM_BOOST_PROGRAM = new PublicKey("BoostxbPp2ENYHGcTLYt1obpcY13HE4NojdqNWdzqSSb");
+export type RpcAccount = { data: [string, string]; owner: string };
+export const BAM_BOOST_PROGRAM = new PublicKey("BoostxbPp2ENYHGcTLYt1obpcY13HE4NojdqNWdzqSSb");
+export const JITOSOL_MINT = new PublicKey('J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn');
+export const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const ASSOCIATED_TOKEN_PROGRAM = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+export const BAM_MERKLE_BASE = 'https://storage.googleapis.com/jito-bam-boost/mainnet';
+export const JITOSOL_RATIO_URL = 'https://kobe.mainnet.jito.network/api/v1/jitosol_sol_ratio';
+
+export function deriveAssociatedJitoSolAddress(owner: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [owner.toBuffer(), TOKEN_PROGRAM.toBuffer(), JITOSOL_MINT.toBuffer()], ASSOCIATED_TOKEN_PROGRAM,
+  )[0];
+}
+
+export function deriveBamBoostAddresses(identity: PublicKey, claimEpoch: number) {
+  if (!Number.isSafeInteger(claimEpoch) || claimEpoch < 0) throw new Error('Invalid BAM claim epoch.');
+  const epoch = Buffer.alloc(8);
+  epoch.writeBigUInt64LE(BigInt(claimEpoch));
+  const distributor = PublicKey.findProgramAddressSync(
+    [Buffer.from('merkle_distributor'), JITOSOL_MINT.toBuffer(), epoch], BAM_BOOST_PROGRAM,
+  )[0];
+  const claimStatus = PublicKey.findProgramAddressSync(
+    [Buffer.from('claim_status'), identity.toBuffer(), distributor.toBuffer()], BAM_BOOST_PROGRAM,
+  )[0];
+  return {distributor, claimStatus, distributorTokenAccount:deriveAssociatedJitoSolAddress(distributor)};
+}
+
+export function deriveBamBoostClaimStatusAddress(identityAccount: string, claimEpoch: number): string {
+  return deriveBamBoostAddresses(new PublicKey(identityAccount), claimEpoch).claimStatus.toBase58();
+}
+
 const BAM_BOOST_CLAIM_STATUS_ACCOUNT_SIZE = 48;
 const BAM_BOOST_CLAIM_STATUS_DISCRIMINATOR = Buffer.from([22, 183, 249, 157, 247, 95, 150, 96]);
 

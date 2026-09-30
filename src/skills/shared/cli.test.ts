@@ -37,3 +37,11 @@ for (const [script,args,expected] of [
   expect(code).not.toBe(0);expect(out+err).toContain(expected);
  });
 }
+
+for (const script of ['validator-revenue/scripts/revenue.ts','validator-performance/scripts/performance.ts']) {
+ test(`${script} omits credentials from unsupported argument diagnostics`,async()=>{
+  const proc=Bun.spawn([process.execPath,resolve(root,'src/skills',script),'--rpc=https://mainnet.helius-rpc.com/?api-key=TEST_ONLY'],{stdout:'pipe',stderr:'pipe'});
+  const [out,err,code]=await Promise.all([new Response(proc.stdout).text(),new Response(proc.stderr).text(),proc.exited]);
+  expect(code).toBe(1);expect(err).toContain('Unknown argument');expect(out+err).not.toContain('TEST_ONLY');
+ });
+}

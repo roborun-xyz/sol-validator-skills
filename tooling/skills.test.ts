@@ -1,6 +1,6 @@
 import {test, expect} from 'bun:test';
-import {resolve, posix} from 'node:path';
-import {buildArtifacts, validateManifest, root} from './skills';
+import {posix} from 'node:path';
+import {buildArtifacts, validateManifest} from './skills';
 
 test('every published skill includes its local document and runtime imports', async () => {
   const files = await buildArtifacts();

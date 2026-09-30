@@ -1,6 +1,6 @@
-import {mkdtemp, mkdir, readFile, rm} from 'node:fs/promises';
+import {mkdtemp, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {resolve, join} from 'node:path';
+import {join} from 'node:path';
 import {checkArtifacts, listFiles, root} from './skills';
 
 async function run(command: string[], cwd: string, env: Record<string, string | undefined>, timeout = 120_000) {

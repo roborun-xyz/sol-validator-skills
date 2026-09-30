@@ -1,11 +1,16 @@
 #!/usr/bin/env bun
 
-import { resolveRpc, rpcOptions, rpcCall } from "../../shared/operator-config";
+import { optionValue } from "../../shared/cli";
 
-const LAMPORTS_PER_SOL = 1_000_000_000n;
+import { formatSol, LAMPORTS_PER_SOL } from "../../shared/amounts";
+
+import { localIso as formatLocalTime } from "../../shared/time";
+
+import { resolveRpc, rpcOptions, rpcCall as rpc } from "../../shared/operator-config";
+
 const VOTE_THRESHOLD = 1n * LAMPORTS_PER_SOL;
-const IDENTITY_HARD_FLOOR = 5n * LAMPORTS_PER_SOL;
-const IDENTITY_EXECUTION_RESERVE = 5_001_000_000n;
+export const IDENTITY_HARD_FLOOR = 5n * LAMPORTS_PER_SOL;
+export const IDENTITY_EXECUTION_RESERVE = 5_001_000_000n;
 const VOTE_PROGRAM_ID = "Vote111111111111111111111111111111111111111";
 const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
 
@@ -21,7 +26,7 @@ type VoteAccountRow = {
   votePubkey: string;
 };
 
-type Plan = {
+export type Plan = {
   checkedAtUtc: string;
   checkedAtLocal: string;
   localTimeZone: string;
@@ -66,11 +71,7 @@ function usage(code = 2): never {
 }
 
 function readArg(name: string): string | undefined {
-  const index = process.argv.indexOf(name);
-  if (index === -1) return undefined;
-  const value = process.argv[index + 1];
-  if (!value || value.startsWith("--")) usage();
-  return value;
+  try { return optionValue(process.argv.slice(2), name); } catch { return usage(); }
 }
 
 function safeLamports(value: number, label: string): bigint {
@@ -78,12 +79,6 @@ function safeLamports(value: number, label: string): bigint {
     throw new Error(`${label} is not a safe non-negative lamport integer: ${value}`);
   }
   return BigInt(value);
-}
-
-function formatSol(lamports: bigint): string {
-  const whole = lamports / LAMPORTS_PER_SOL;
-  const fraction = (lamports % LAMPORTS_PER_SOL).toString().padStart(9, "0");
-  return `${whole}.${fraction}`;
 }
 
 export function calculateActions(
@@ -128,29 +123,6 @@ export function assertFundingFloor(identityBalance: bigint, funding: bigint): vo
   if (funding > 0n && identityBalance - funding < IDENTITY_HARD_FLOOR) {
     throw new Error("sweep would leave the identity below the 5 SOL hard floor; no funds may be moved under this plan");
   }
-}
-
-function formatLocalTime(date: Date, timeZone: string): string {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-    timeZoneName: "longOffset",
-  });
-  const parts = Object.fromEntries(
-    formatter.formatToParts(date).map((part) => [part.type, part.value]),
-  );
-  const offset = (parts.timeZoneName ?? "GMT+00:00").replace("GMT", "");
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}${offset}`;
-}
-
-async function rpc<T>(rpcUrl: string, method: string, params: unknown[]): Promise<T> {
-  return rpcCall(rpcUrl, method, params);
 }
 
 async function main() {

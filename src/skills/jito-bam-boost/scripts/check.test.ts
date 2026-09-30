@@ -20,3 +20,10 @@ test('BAM profiles verify current identity; historical explicit claimants bypass
   await expect(resolveBamTarget({config:path,profile:'missing',rpcUrl},call)).rejects.toThrow('Unknown');
  } finally {await rm(directory,{recursive:true,force:true});}
 });
+
+test('BAM checker accepts the shared RPC override before rejecting an invalid claimant',async()=>{
+ const {resolve}=await import('node:path');
+ const proc=Bun.spawn([process.execPath,resolve(import.meta.dir,'check.ts'),'--rpc','https://mainnet.helius-rpc.com/?api-key=TEST_ONLY','--identity','invalid-fixture-key'],{stdout:'pipe',stderr:'pipe'});
+ const [out,err,code]=await Promise.all([new Response(proc.stdout).text(),new Response(proc.stderr).text(),proc.exited]);
+ expect(code).toBe(1);expect(err).toContain('Non-base58 character');expect(out+err).not.toContain('Usage:');expect(out+err).not.toContain('TEST_ONLY');
+});

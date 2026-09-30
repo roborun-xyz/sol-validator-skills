@@ -1,4 +1,6 @@
 // Subprocess-only fixture. All requests and child processes are intercepted.
+import { readFileSync } from "node:fs";
+import { selectRpc, rpcOptions, validateConfig } from "../../../shared/operator-config";
 const mode = process.env.SWEEP_FIXTURE_MODE;
 const identity = "fixture-identity";
 const vote = "fixture-vote";
@@ -12,20 +14,27 @@ globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
   return Response.json({ jsonrpc: "2.0", id: 1, result: { value: 1_000_000 } });
 }) as typeof fetch;
 
-Bun.spawn = ((command: string[]) => {
+Bun.spawn = ((command: string[], options?: {env?: Record<string, string | undefined>}) => {
   let stdout = "";
   let stderr = "";
   let exitCode = 0;
   if (command[1]?.endsWith("/plan.ts")) {
     // Deliberately model an older planner to test the executor's own preflight.
-    const balance = mode === "safe-plan" ? 5_000_000_000n : 4_000_000_000n;
+    const safePlan = mode === "safe-plan" || mode === "planner-rpc-check";
+    const balance = safePlan ? 5_000_000_000n : 4_000_000_000n;
+    if (mode === "planner-rpc-check") {
+      const environment = options?.env ?? {};
+      const config = validateConfig(JSON.parse(readFileSync(environment.VALIDATOR_OPS_CONFIG!, "utf8")));
+      const selected = selectRpc(rpcOptions(command.slice(2)), config, environment);
+      if (selected.rpcUrl !== process.env.SWEEP_EXPECT_RPC) throw new Error("Planner used a different endpoint than the executor");
+    }
     stdout = JSON.stringify({
       voteAccount: vote, identityAccount: identity,
       identityBalanceLamports: String(balance), voteBalanceLamports: "2000000000",
       voteRentExemptLamports: "27000000", voteTransferLamports: "1973000000",
       identityTransferLamports: "0", projectedIdentityAfterVoteLamports: String(balance + 1_973_000_000n),
       bondFundLamports: "1973000000", expectedFinalIdentityLamports: String(balance),
-      voteAction: "withdraw-all", identityAction: mode === "safe-plan" ? "no-op-at-target" : "skip-below-threshold",
+      voteAction: "withdraw-all", identityAction: safePlan ? "no-op-at-target" : "skip-below-threshold",
     });
   } else if (command[0] === "solana-keygen") {
     stdout = command[2].endsWith("/identity.fixture") ? identity

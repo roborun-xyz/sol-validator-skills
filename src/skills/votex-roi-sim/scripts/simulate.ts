@@ -1,16 +1,23 @@
 #!/usr/bin/env bun
 
+import { fetchResponse } from "../../shared/http";
+
+import { optionValue } from "../../shared/cli";
+
 import { simulateBids } from "./model";
 
-import { resolveRpc, rpcOptions, redactRpc } from "../../shared/operator-config.ts";
+import { createRpcContext, fetchRpcResponse } from "../../shared/operator-config.ts";
+import {
+  GAUGE_PROGRAM as GAUGE_PROGRAM_ADDRESS, VAULT_GAUGEMEISTER as VAULT_GAUGEMEISTER_ADDRESS,
+  decodeVaultEpochInfo, votexStatsUrl,
+} from "../../shared/votex-accounts";
 
 import { Connection, PublicKey } from "@solana/web3.js";
 
-let resolvedRpc: string | undefined;
-const configuredRpc = async () => resolvedRpc ??= (await resolveRpc(rpcOptions(process.argv.slice(2)))).rpcUrl;
+const rpcContext = createRpcContext();
 
-const GAUGE_PROGRAM = new PublicKey("GaugesLJrnVjNNWLReiw3Q7xQhycSBRgeHGTMDUaX231");
-const VAULT_GAUGEMEISTER = new PublicKey("HniSajyYDYEfdbNfW8L5Eq8W1pxt8XsYDgc6TNsx7t6x");
+const GAUGE_PROGRAM = new PublicKey(GAUGE_PROGRAM_ADDRESS);
+const VAULT_GAUGEMEISTER = new PublicKey(VAULT_GAUGEMEISTER_ADDRESS);
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
 type Args = {
@@ -27,13 +34,7 @@ type Args = {
   format: "markdown" | "json";
 };
 
-function argValue(name: string): string | undefined {
-  const prefix = `${name}=`;
-  const inline = process.argv.find((arg) => arg.startsWith(prefix));
-  if (inline) return inline.slice(prefix.length);
-  const index = process.argv.indexOf(name);
-  return index >= 0 ? process.argv[index + 1] : undefined;
-}
+const argValue = (name: string) => optionValue(process.argv.slice(2), name);
 
 function usage(code = 2): never {
   console.error(`Usage: bun scripts/simulate.ts --epoch <current|N> --gauge <GAUGE> --bids 10,20,50 [options] [--rpc URL] [--config PATH] [--profile NAME]`);
@@ -105,13 +106,13 @@ function pct(value: number): string {
 
 async function currentVaultTargetEpoch(connection: Connection): Promise<number> {
   const account = await connection.getAccountInfo(VAULT_GAUGEMEISTER, "confirmed");
-  if (!account || account.data.length < 181) throw new Error(`Vault gaugemeister not found: ${VAULT_GAUGEMEISTER.toString()}`);
-  return account.data.readUInt32LE(173) + 1;
+  if (!account) throw new Error(`Vault gaugemeister not found: ${VAULT_GAUGEMEISTER.toString()}`);
+  return decodeVaultEpochInfo(account.data).activeVoteBuyTargetEpoch;
 }
 
 async function fetchStats(epoch: number) {
-  const source = `https://raw.githubusercontent.com/VotaFi/tribeca-stats/refs/heads/main/the-vault/${epoch}/stats.json`;
-  const response = await fetch(source, {signal: AbortSignal.timeout(20000)});
+  const source = votexStatsUrl(epoch);
+  const response = await fetchResponse(source);
   if (!response.ok) throw new Error(`Failed to fetch Votex stats for epoch ${epoch}: HTTP ${response.status}`);
   const stats = await response.json() as { totalVev: string; voteBuys: Array<{ gauge: string; amount: string }> };
   const totalVev = Number(BigInt(stats.totalVev)) / 1e6;
@@ -120,10 +121,10 @@ async function fetchStats(epoch: number) {
 }
 
 async function fetchStakebotGaugeStake(): Promise<{ source: string; totalGaugeDirectedSol: number }> {
-  const latest = (await (await fetch("https://raw.githubusercontent.com/SolanaVault/stakebot-data/main/bot-stats-latest.txt", {signal: AbortSignal.timeout(20000)})).text()).trim();
+  const latest = (await (await fetchResponse("https://raw.githubusercontent.com/SolanaVault/stakebot-data/main/bot-stats-latest.txt")).text()).trim();
   if (!latest || latest.includes("..") || !/^[A-Za-z0-9_./-]+$/.test(latest)) throw new Error("Invalid stakebot snapshot path");
   const source = `https://raw.githubusercontent.com/SolanaVault/stakebot-data/main/${latest}`;
-  const stats = await (await fetch(source, {signal: AbortSignal.timeout(20000)})).json() as {
+  const stats = await (await fetchResponse(source)).json() as {
     validatorTargets: Array<{ targetStake: { bucketGauges: string } }>;
   };
   const totalGaugeDirectedSol = stats.validatorTargets.reduce(
@@ -135,7 +136,7 @@ async function fetchStakebotGaugeStake(): Promise<{ source: string; totalGaugeDi
 
 async function fetchSolUsd(): Promise<{ source: string; solUsd: number }> {
   const source = `https://lite-api.jup.ag/price/v3?ids=${WSOL_MINT}`;
-  const response = await fetch(source, {signal: AbortSignal.timeout(20000)});
+  const response = await fetchResponse(source);
   if (!response.ok) throw new Error(`Failed to fetch SOL price: HTTP ${response.status}`);
   const prices = await response.json() as Record<string, { usdPrice?: number }>;
   const solUsd = prices[WSOL_MINT]?.usdPrice;
@@ -161,10 +162,10 @@ async function totalEpochGaugeVev(connection: Connection, epoch: number): Promis
 
 async function main() {
 const args = parseArgs();
-const connection = new Connection((await configuredRpc()), {commitment:"confirmed",disableRetryOnRateLimit:true,fetch:Object.assign(async(input:Parameters<typeof fetch>[0],init?:Parameters<typeof fetch>[1])=>{
- try {const response=await fetch(input,{...init,redirect:'error',signal:AbortSignal.timeout(20000)});if(!response.ok) throw new Error();return response;}
- catch {throw new Error('RPC transport failed; URL omitted');}
-},{preconnect:fetch.preconnect})});
+const connection = new Connection(await rpcContext.url(), {
+ commitment:'confirmed', disableRetryOnRateLimit:true,
+ fetch:Object.assign(fetchRpcResponse, {preconnect:fetch.preconnect}),
+});
 const gaugeAccount = await connection.getAccountInfo(new PublicKey(args.gauge));
 if(!gaugeAccount || !gaugeAccount.owner.equals(GAUGE_PROGRAM) || gaugeAccount.data.length<73 || !gaugeAccount.data.subarray(8,40).equals(VAULT_GAUGEMEISTER.toBuffer()) || gaugeAccount.data[72]!==0) throw new Error('Gauge is not an active Vault gauge');
 const epoch = args.epoch === "current" ? await currentVaultTargetEpoch(connection) : Number(args.epoch);
@@ -175,7 +176,7 @@ try {
   // VotaFi stats may be unpublished for the live epoch. If the caller supplied
   // both --total-vev and --other-bids, proceed against the live/partial pool.
   if (args.totalVev === undefined || args.otherBids === undefined) throw error;
-  const source = `https://raw.githubusercontent.com/VotaFi/tribeca-stats/refs/heads/main/the-vault/${epoch}/stats.json (stats unavailable; using explicit --total-vev and --other-bids overrides)`;
+  const source = `${votexStatsUrl(epoch)} (stats unavailable; using explicit --total-vev and --other-bids overrides)`;
   stats = { source, totalVev: args.totalVev, totalUsdc: args.otherBids + (args.currentBid ?? 0), voteBuys: [] };
 }
 const stakebot = await fetchStakebotGaugeStake();
@@ -240,6 +241,6 @@ if (args.format === "json") {
 }
 if(import.meta.main) main().catch(error=>{
  let message=error instanceof Error?error.message:String(error);
- message=redactRpc(message,resolvedRpc);
+ message=rpcContext.redact(message);
  console.error(message);process.exit(1);
 });

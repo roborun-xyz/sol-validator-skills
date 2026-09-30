@@ -1,9 +1,13 @@
 #!/usr/bin/env bun
 
-import { resolveRpc, rpcOptions, redactRpc, rpcCall } from "../../shared/operator-config.ts";
+import { createRpcContext } from "../../shared/operator-config.ts";
+import {
+  VOTEX_PROGRAM, VAULT_CONFIG, VAULT_GAUGEMEISTER, VAULT_ALLOWED_MINTS,
+  decodeVaultEpochInfo, votexStatsUrl, type VaultEpochInfo as EpochInfo,
+} from "../../shared/votex-accounts";
 
 import { base58Encode, base58Decode } from "../../shared/base58";
-import { fetchJson } from "../../shared/http";
+import { fetchResponse, fetchJson } from "../../shared/http";
 
 import { createHash } from "node:crypto";
 
@@ -14,8 +18,7 @@ const epochOnly = process.argv.includes("--epoch-only");
 const maxPagesArg = process.argv.find((arg) => arg.startsWith("--max-pages="));
 const maxPages = maxPagesArg ? Number(maxPagesArg.split("=")[1]) : 20;
 const localTimeZone = process.env.LOCAL_TIME_ZONE ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-let resolvedRpc: string | undefined;
-const configuredRpc = async () => resolvedRpc ??= (await resolveRpc(rpcOptions(process.argv.slice(2)))).rpcUrl;
+const rpcContext = createRpcContext();
 
 function isCurrentEpochArg(value: string | undefined): boolean {
   return value === "current" || value === "now";
@@ -42,10 +45,6 @@ let targetEpoch = 0;
 let statsUrl = "";
 let currentEpochInfo: EpochInfo | null = null;
 
-const VOTEX_PROGRAM = "VotAjwzAEF9ZLNAYEB1ivXt51911EqYGVu9NeaEKRyy";
-const VAULT_CONFIG = "AAJ1TUeLfzyCrywCukTaehieCPe6bQtaNbNXpcMDLPeB";
-const VAULT_GAUGEMEISTER = "HniSajyYDYEfdbNfW8L5Eq8W1pxt8XsYDgc6TNsx7t6x";
-const VAULT_ALLOWED_MINTS = "5ArmEZ9iso7p91tZafCRsfNwmoWpCG1Sd7UGbqieKBZ9";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const ASSOCIATED_TOKEN_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
@@ -65,14 +64,6 @@ type NameResolution = {
   name: string;
   quarry?: string;
   tokenMint?: string;
-};
-
-type EpochInfo = {
-  epochDurationSeconds: number;
-  currentRewardsEpoch: number;
-  activeVoteBuyTargetEpoch: number;
-  currentEpochStart: number;
-  nextEpochStartsAt: number;
 };
 
 type TransactionRow = {
@@ -104,12 +95,10 @@ type ComputedRow = {
 
 const increaseVoteBuyDiscriminator = createHash("sha256").update("global:increase_vote_buy").digest().subarray(0, 8);
 
-async function rpc<T>(method: string, params: unknown): Promise<T> {
-  return rpcCall((await configuredRpc()), method, params);
-}
+const rpc = rpcContext.rpc;
 
 async function rpcBatch<T>(calls: Array<{ method: string; params: unknown }>): Promise<T[]> {
-  const json = await fetchJson<any[]>((await configuredRpc()), {
+  const json = await fetchJson<any[]>((await rpcContext.url()), {
     method: "POST",
     headers: {"content-type":"application/json"},
     body: JSON.stringify(calls.map((call,id)=>({jsonrpc:"2.0",id,method:call.method,params:call.params}))),
@@ -283,20 +272,7 @@ async function getVaultEpochInfo(): Promise<EpochInfo> {
   ]);
   const encoded = account.value?.data?.[0];
   if (!encoded) throw new Error(`Vault gaugemeister not found: ${VAULT_GAUGEMEISTER}`);
-  const data = Buffer.from(encoded, "base64");
-  if (data.length < 185) throw new Error(`Vault gaugemeister data too short: ${data.length}`);
-
-  const epochDurationSeconds = data.readUInt32LE(169);
-  const currentRewardsEpoch = data.readUInt32LE(173);
-  const nextEpochStartsAt = Number(data.readBigInt64LE(177));
-  const currentEpochStart = nextEpochStartsAt - epochDurationSeconds;
-  return {
-    epochDurationSeconds,
-    currentRewardsEpoch,
-    activeVoteBuyTargetEpoch: currentRewardsEpoch + 1,
-    currentEpochStart,
-    nextEpochStartsAt,
-  };
+  return decodeVaultEpochInfo(Buffer.from(encoded, "base64"));
 }
 
 async function getEpochBuyWindow(): Promise<{ start: number; end: number; currentRewardsEpoch: number }> {
@@ -489,7 +465,7 @@ try {
     targetEpoch = Number(epochArg);
   }
 
-  statsUrl = `https://raw.githubusercontent.com/VotaFi/tribeca-stats/refs/heads/main/the-vault/${targetEpoch}/stats.json`;
+  statsUrl = votexStatsUrl(targetEpoch);
 
   if (epochOnly) {
     if (asJson) {
@@ -500,12 +476,12 @@ try {
     process.exit(0);
   }
 
-  const response = await fetch(statsUrl, {signal: AbortSignal.timeout(20000)});
+  const response = await fetchResponse(statsUrl);
   if (response.status === 404) result = await buildFromOnChainTransactions();
   else if (!response.ok) throw new Error(`Failed to fetch stats for The Vault epoch ${targetEpoch}: HTTP ${response.status}`);
   else result = await buildFromPublishedStats(response);
 } catch (error) {
-  console.error(redactRpc(error instanceof Error ? error.message : String(error), resolvedRpc));
+  console.error(rpcContext.redact(error instanceof Error ? error.message : String(error)));
   process.exit(1);
 }
 

@@ -2,6 +2,8 @@ import { readFile, mkdir, writeFile, rename, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fetchResponse } from './http';
+import { base58Decode } from './base58';
 
 export type Profile = {
   cluster: 'mainnet-beta'; voteAccount: string; identity: string; rpcUrl?: string; rpcEnv?: string;
@@ -9,16 +11,12 @@ export type Profile = {
 };
 export type Config = { version: 1 | 2; defaultProfile?: string; profiles: Record<string, Profile> };
 export type Input = { config?: string; profile?: string; validator?: string; voteAccount?: string; rpcUrl?: string };
+export type RpcCaller = (url: string, method: string, params?: unknown) => Promise<any>;
 export const MAINNET_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
-const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 export function isPublicKey(value: unknown): value is string {
-  if (typeof value !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value)) return false;
-  let n = 0n;
-  for (const char of value) n = n * 58n + BigInt(alphabet.indexOf(char));
-  let bytes = 0;
-  while (n > 0n) { bytes++; n >>= 8n; }
-  return bytes + (value.match(/^1*/)?.[0].length ?? 0) === 32;
+  return typeof value === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value) && base58Decode(value).length === 32;
 }
+
 export function operatorPath(path: string | undefined, envName: string, filename: string): string {
   const value = path ?? process.env[envName] ?? `${homedir()}/.config/validator-ops/${filename}`;
   if (!value.trim()) throw new Error(`Empty configuration path: ${envName}.`);
@@ -74,20 +72,19 @@ export function heliusUrl(url?: string): string {
     throw new Error('Mainnet RPC must use https://mainnet.helius-rpc.com.');
   return url;
 }
+function selectProfile(input: Input, config: Config) {
+  const names = Object.keys(config.profiles);
+  const name = input.profile ?? config.defaultProfile ?? (names.length === 1 ? names[0] : undefined);
+  if (name && !Object.hasOwn(config.profiles, name)) throw new Error('Unknown operator profile.');
+  return {name, names, profile: name ? config.profiles[name] : undefined};
+}
 export function selectInput(input: Input, config: Config, env = process.env) {
   if (input.validator && input.voteAccount) throw new Error('Use either --validator or --vote-account, not both.');
-  let name = input.profile;
   const explicit = input.voteAccount ?? input.validator;
-  if (!name && !explicit) {
-    name = config.defaultProfile;
-    if (!name) {
-      const names = Object.keys(config.profiles);
-      if (names.length === 1) name = names[0];
-      else throw new Error(names.length ? `PROFILE_REQUIRED: choose --profile (${names.join(', ')}).` : 'ONBOARDING_REQUIRED: provide a validator or create a validator profile.');
-    }
+  const {profile: p, names} = selectProfile(input, config);
+  if (!explicit && !p) {
+    throw new Error(names.length ? `PROFILE_REQUIRED: choose --profile (${names.join(', ')}).` : 'ONBOARDING_REQUIRED: provide a validator or create a validator profile.');
   }
-  const p = name && Object.hasOwn(config.profiles, name) ? config.profiles[name] : undefined;
-  if (name && !p) throw new Error('Unknown operator profile.');
   const target = explicit ?? p?.voteAccount;
   if (!target || !isPublicKey(target)) throw new Error('Invalid validator public key.');
   const rpc = selectRpc(input, config, env);
@@ -95,16 +92,13 @@ export function selectInput(input: Input, config: Config, env = process.env) {
 }
 // RPC selection does not change the explicit validator/claimant target.
 export function selectRpc(input: Input, config: Config, env = process.env) {
-  let name = input.profile;
-  if (name && !Object.hasOwn(config.profiles, name)) throw new Error('Unknown operator profile.');
-  if (!name) name = config.defaultProfile ?? (Object.keys(config.profiles).length === 1 ? Object.keys(config.profiles)[0] : undefined);
-  const profile = name ? config.profiles[name] : undefined;
+  const {name, profile, names} = selectProfile(input, config);
   const nonempty = (value?: string) => value?.trim() || undefined;
   const explicit = nonempty(input.rpcUrl);
   // Version 1 retains its custom variable reference until explicit migration.
   const environment = nonempty(env[profile?.rpcEnv ?? 'SOLANA_RPC_URL']);
-  if (!explicit && !environment && !name && Object.keys(config.profiles).length > 1)
-    throw new Error(`PROFILE_REQUIRED: choose --profile (${Object.keys(config.profiles).join(', ')}).`);
+  if (!explicit && !environment && !name && names.length > 1)
+    throw new Error(`PROFILE_REQUIRED: choose --profile (${names.join(', ')}).`);
   const source = explicit ? 'cli' : environment ? 'env' : 'config';
   return {rpcUrl: heliusUrl(explicit ?? environment ?? profile?.rpcUrl), rpcSource: source};
 }
@@ -125,6 +119,27 @@ export function rpcOptions(args: string[]): Input {
   }
   return input;
 }
+/** One lazy RPC selection per command, shared by requests, redaction and child processes. */
+export function createRpcContext(input: () => Input = () => rpcOptions(process.argv.slice(2))) {
+  let pending: Promise<string> | undefined;
+  let resolved: string | undefined;
+  let selectedPath: string | undefined;
+  const url = () => pending ??= (async () => {
+    const options = input();
+    // A missing default file is allowed. Do not turn it into an explicit missing file in children.
+    selectedPath = options.config !== undefined || process.env.VALIDATOR_OPS_CONFIG !== undefined ? configPath(options.config) : undefined;
+    resolved = (await resolveRpc(options)).rpcUrl;
+    return resolved;
+  })();
+  return {
+    url,
+    rpc: async <T = any>(method: string, params: unknown = []) => rpcCall<T>(await url(), method, params),
+    redact: (value: string) => redactRpc(value, resolved ?? process.env.SOLANA_RPC_URL),
+    // Forward the selected endpoint and explicit operator file. Legacy-aware children
+    // also receive --rpc so a custom v1 variable cannot override this endpoint.
+    environment: async () => ({...process.env, SOLANA_RPC_URL:await url(), VALIDATOR_OPS_CONFIG:selectedPath}),
+  };
+}
 export function redactRpc(value: string, url?: string): string {
   if (url) {
     value = value.replaceAll(url, '<RPC>');
@@ -132,17 +147,24 @@ export function redactRpc(value: string, url?: string): string {
   }
   return value.replace(/https?:\/\/[^\s"'\\<>]+/gi, '<RPC>');
 }
-export async function rpcCall(url: string, method: string, params: unknown = []): Promise<any> {
+/** SDKs must not include failing provider response bodies in diagnostics. */
+export async function fetchRpcResponse(url: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {
   try {
-    const response = await fetch(url, { method: 'POST', headers: {'content-type': 'application/json'},
-      body: JSON.stringify({jsonrpc:'2.0', id:1, method, params}), redirect: 'error', signal: AbortSignal.timeout(20000) });
+    const response = await fetchResponse(url, init);
     if (!response.ok) throw new Error();
+    return response;
+  } catch { throw new Error('RPC transport failed; URL omitted.'); }
+}
+export async function rpcCall<T = any>(url: string, method: string, params: unknown = []): Promise<T> {
+  try {
+    const response = await fetchRpcResponse(url, { method: 'POST', headers: {'content-type': 'application/json'},
+      body: JSON.stringify({jsonrpc:'2.0', id:1, method, params}) });
     const body: any = await response.json();
     if (body.error || !Object.hasOwn(body, 'result')) throw new Error();
     return body.result;
   } catch { throw new Error(`RPC ${method} failed; check connectivity and credentials (URL omitted).`); }
 }
-export async function verifyValidator(target: string, url: string, call = rpcCall) {
+export async function verifyValidator(target: string, url: string, call: RpcCaller = rpcCall) {
   if (await call(url, 'getGenesisHash') !== MAINNET_GENESIS) throw new Error('RPC network mismatch: expected Solana mainnet-beta.');
   const accounts = await call(url, 'getVoteAccounts', [{commitment:'finalized'}]);
   if (!Array.isArray(accounts?.current) || !Array.isArray(accounts?.delinquent)) throw new Error('Invalid RPC vote-account response.');
@@ -160,7 +182,7 @@ export async function verifyValidator(target: string, url: string, call = rpcCal
   if (!isPublicKey(matches[0].votePubkey) || !isPublicKey(matches[0].nodePubkey)) throw new Error('Invalid RPC validator public keys.');
   return { voteAccount: matches[0].votePubkey as string, identity: matches[0].nodePubkey as string };
 }
-export async function resolveOperator(input: Input, call = rpcCall) {
+export async function resolveOperator(input: Input, call: RpcCaller = rpcCall) {
   const selected = selectInput(input, await readConfig(input.config));
   const live = await verifyValidator(selected.target, selected.rpcUrl, call);
   if (selected.profile && !selected.explicit && live.identity !== selected.profile.identity)

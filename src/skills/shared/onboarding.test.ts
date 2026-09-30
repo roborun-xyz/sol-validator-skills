@@ -54,7 +54,7 @@ test('fresh HOME defaults resolve outside cwd and profile status survives absent
  const dir=await mkdtemp(join(tmpdir(),'onboard-home-'));
  const bundle=join(dir,'installed');
  try {
-  for(const relative of ['onboarding/scripts/onboard.ts','onboarding/scripts/status.ts','shared/operator-config.ts'])
+  for(const relative of ['onboarding/scripts/onboard.ts','onboarding/scripts/status.ts','shared/operator-config.ts','shared/base58.ts','shared/http.ts'])
    await Bun.write(join(bundle,'src/skills',relative),await Bun.file(resolve(import.meta.dir,'..',relative)).text());
   const home=join(dir,'operator');
   await Bun.write(join(home,'.config/validator-ops/config.json'),JSON.stringify({version:1,profiles:{}}));
@@ -91,5 +91,19 @@ test('explicit legacy migration is atomic and identity refresh preserves saved U
   const changed=await run(['refresh','--profile','one','--rpc','https://mainnet.helius-rpc.com/?api-key=TEST_ONLY&label=EXPLICIT_UPDATE']);expect(changed.code).toBe(0);expect(changed.out).not.toContain('EXPLICIT_UPDATE');expect(JSON.parse(await readFile(path,'utf8')).profiles.one.rpcUrl).toContain('EXPLICIT_UPDATE');
   const drift=JSON.parse(await readFile(path,'utf8'));drift.profiles.one.identity=drift.profiles.one.voteAccount;await Bun.write(path,JSON.stringify(drift));
   const driftBefore=await readFile(path,'utf8');expect((await run(['migrate'])).err).toContain('PROFILE_CONFLICT');expect(await readFile(path,'utf8')).toBe(driftBefore);
+ } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('RPC-only child commands retain optional default config semantics in a fresh home', async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'rpc-child-default-'));
+ try {
+  const module=resolve(import.meta.dir,'operator-config.ts');
+  const childCode=`import {resolveRpc} from ${JSON.stringify(module)}; await resolveRpc(); console.log('child RPC configured');`;
+  const parentCode=`import {createRpcContext} from ${JSON.stringify(module)}; const context=createRpcContext(); const child=Bun.spawn([process.execPath,'-e',${JSON.stringify(childCode)}],{cwd:${JSON.stringify(dir)},env:await context.environment(),stdout:'inherit',stderr:'inherit'}); process.exit(await child.exited);`;
+  const env: Record<string,string|undefined>={...process.env,HOME:dir,SOLANA_RPC_URL:'https://mainnet.helius-rpc.com/?api-key=TEST_ONLY'};
+  delete env.VALIDATOR_OPS_CONFIG;
+  const proc=Bun.spawn([process.execPath,'-e',parentCode],{cwd:dir,env,stdout:'pipe',stderr:'pipe'});
+  const [out,err,code]=await Promise.all([new Response(proc.stdout).text(),new Response(proc.stderr).text(),proc.exited]);
+  expect(code).toBe(0);expect(err).toBe('');expect(out).toContain('child RPC configured');expect(out).not.toContain('TEST_ONLY');
  } finally {await rm(dir,{recursive:true,force:true});}
 });

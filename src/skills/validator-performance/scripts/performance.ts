@@ -1,29 +1,11 @@
 #!/usr/bin/env bun
 
-import { fetchJson } from "../../shared/http";
-import { rpcCall } from "../../shared/operator-config";
+import { fetchSvtHistory } from "../../shared/epoch-history";
+import { lamportsToSol } from "../../shared/amounts";
 
-import { resolveOperator } from "../../shared/operator-config";
+import { rpcCall as rpc, resolveOperator } from "../../shared/operator-config";
 
-type Format = "markdown" | "csv" | "json";
-
-type Options = {
-  config?: string;
-  profile?: string;
-  validator?: string;
-  voteAccount?: string;
-  epochs: number;
-  format: Format;
-  includeCurrent: boolean;
-  rpcUrl: string;
-};
-
-type RpcResponse<T> = {
-  jsonrpc: string;
-  id: number;
-  result?: T;
-  error?: { code: number; message: string };
-};
+import { parseEpochQueryArgs, EPOCH_QUERY_HELP, type EpochQueryOptions as Options } from "../../shared/cli";
 
 type EpochInfo = {
   epoch: number;
@@ -45,16 +27,6 @@ type VoteAccountInfo = {
 type VoteAccountsResponse = {
   current: VoteAccountInfo[];
   delinquent: VoteAccountInfo[];
-};
-
-type TrilliumRow = {
-  identity_pubkey?: string;
-  vote_account_pubkey: string;
-  epoch: number;
-};
-
-type SvtHistoryResponse = {
-  data: SvtHistoryRow[];
 };
 
 type SvtHistoryRow = {
@@ -93,79 +65,18 @@ type CurrentStatus = {
   nodePubkey: string | null;
 };
 
-const LAMPORTS_PER_SOL = 1_000_000_000;
 const MAX_TVC_PER_SLOT = 16;
 const DEFAULT_SLOTS_PER_EPOCH = 432_000;
-const TRILLIUM_BASE_URL = "https://api.trillium.so/validator_rewards";
-const SVT_HISTORY_URL = "https://api.validators.svt.one/validators-history/history";
-const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 function usage(): never {
   console.log(`Usage:
   bun src/skills/validator-performance/scripts/performance.ts --vote-account <VOTE_ACCOUNT> [--epochs 30]
   bun src/skills/validator-performance/scripts/performance.ts --validator <VOTE_OR_IDENTITY> [--epochs 30]
 
-Options:
-  --vote-account <pubkey>       Mainnet vote account to query
-  --validator <pubkey>          Vote account or identity pubkey
-  --epochs <n>                  Number of completed epochs to fetch (default: 30)
-  --include-current             Include current in-progress epoch instead of only completed epochs
-  --format <markdown|csv|json>  Output format (default: markdown)
-  --rpc <url>                   Helius mainnet RPC URL (default: SOLANA_RPC_URL or saved profile URL)
-  --config <path>              Local operator configuration
-  --profile <name>             Configured validator profile
-  --help                        Show this help text
+${EPOCH_QUERY_HELP}
 `);
   process.exit(0);
 }
-
-function parseArgs(argv: string[]): Options {
-  const opts: Options = {
-    epochs: 30,
-    format: "markdown",
-    includeCurrent: false,
-    rpcUrl: "",
-  };
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    const next = () => {
-      const value = argv[++i];
-      if (!value) throw new Error(`Missing value for ${arg}`);
-      return value;
-    };
-
-    if (arg === "--help" || arg === "-h") usage();
-    else if (arg === "--vote-account") opts.voteAccount = next();
-    else if (arg === "--validator") opts.validator = next();
-    else if (arg === "--epochs" || arg === "-n") opts.epochs = parsePositiveInt(next(), "--epochs");
-    else if (arg === "--format") opts.format = parseFormat(next());
-    else if (arg === "--include-current") opts.includeCurrent = true;
-    else if (arg === "--rpc") opts.rpcUrl = next();
-    else if (arg === "--config") opts.config = next();
-    else if (arg === "--profile") opts.profile = next();
-    else if (!arg.startsWith("-") && !opts.validator && !opts.voteAccount) opts.validator = arg;
-    else throw new Error(`Unknown argument: ${arg}`);
-  }
-
-  return opts;
-}
-
-function parsePositiveInt(value: string, name: string): number {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${name} must be a positive integer.`);
-  return parsed;
-}
-
-function parseFormat(value: string): Format {
-  if (value === "markdown" || value === "csv" || value === "json") return value;
-  throw new Error("--format must be markdown, csv, or json.");
-}
-
-async function rpc<T>(rpcUrl: string, method: string, params: unknown[] = []): Promise<T> {
-  return rpcCall(rpcUrl, method, params);
-}
-
 
 function toNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -188,10 +99,6 @@ function toLamports(value: unknown): bigint | null {
   const trimmed = value.trim();
   if (!/^\d+$/.test(trimmed)) return null;
   return BigInt(trimmed);
-}
-
-function lamportsToSol(value: bigint): number {
-  return Number(value) / LAMPORTS_PER_SOL;
 }
 
 function stakeLamportsToSol(value: unknown): number | null {
@@ -222,37 +129,6 @@ async function fetchCurrentStatus(opts: Options, voteAccount: string): Promise<C
   } catch {
     return { isDelinquent: null, activatedStakeSol: null, liveCommissionPct: null, nodePubkey: null };
   }
-}
-
-async function fetchSvtHistory(
-  voteAccount: string,
-  firstEpoch: number,
-  lastEpoch: number,
-  epochCount: number,
-): Promise<SvtHistoryRow[]> {
-  const params = new URLSearchParams({
-    network: "mainnet",
-    vote_id: voteAccount,
-    epoch_count: String(epochCount),
-    epoch_from: String(lastEpoch),
-  });
-  const payload = await fetchJson<SvtHistoryResponse>(`${SVT_HISTORY_URL}?${params}`);
-  if (!Array.isArray(payload.data)) {
-    throw new Error("JPool/SVT history response did not include a data array.");
-  }
-
-  const rows = payload.data
-    .filter((row) => row.epoch >= firstEpoch && row.epoch <= lastEpoch)
-    .sort((a, b) => a.epoch - b.epoch);
-  const epochs = new Set(rows.map((row) => row.epoch));
-  const missing = [];
-  for (let epoch = firstEpoch; epoch <= lastEpoch; epoch++) {
-    if (!epochs.has(epoch)) missing.push(epoch);
-  }
-  if (missing.length > 0) {
-    throw new Error(`JPool/SVT history missing epoch(s): ${missing.join(", ")}.`);
-  }
-  return rows;
 }
 
 function parseSkipRatePct(row: SvtHistoryRow): number | null {
@@ -316,7 +192,7 @@ async function collectRows(opts: Options, voteAccount: string): Promise<{
   const firstEpoch = lastEpoch - opts.epochs + 1;
 
   const [svtRows, current] = await Promise.all([
-    fetchSvtHistory(voteAccount, firstEpoch, lastEpoch, opts.epochs),
+    fetchSvtHistory<SvtHistoryRow>(voteAccount, firstEpoch, lastEpoch, opts.epochs),
     fetchCurrentStatus(opts, voteAccount),
   ]);
 
@@ -352,11 +228,6 @@ function fmtPct(value: number | null, digits = 2): string {
 function fmtInt(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
   return Math.round(value).toLocaleString("en-US");
-}
-
-function fmtSol(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return "—";
-  return value.toFixed(2);
 }
 
 function fmtRank(value: number | null): string {
@@ -471,7 +342,7 @@ export function renderCsv(rows: PerfRow[]): string {
 }
 
 async function main() {
-  const opts = parseArgs(Bun.argv.slice(2));
+  const opts = parseEpochQueryArgs(Bun.argv.slice(2), usage);
   const operator = await resolveOperator(opts);
   opts.rpcUrl = operator.rpcUrl;
   opts.voteAccount = operator.voteAccount;

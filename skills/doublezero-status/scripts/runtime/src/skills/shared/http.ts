@@ -1,8 +1,14 @@
+/** Every HTTP request uses the same timeout and refuses redirects. */
+export async function fetchResponse(url: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {
+ try { return await fetch(url, {...init, redirect:'error', signal:AbortSignal.timeout(20000)}); }
+ catch { throw new Error('HTTP transport failed; URL omitted.'); }
+}
+
 /** Read-only JSON fetches: bounded retries, no provider bodies/credentials in errors. */
 export async function fetchJson<T>(url:string, init?:RequestInit, retries=4, optional404=false):Promise<T> {
  for(let attempt=0;;attempt++) {
   try {
-   const response=await fetch(url,{...init,redirect:'error',signal:AbortSignal.timeout(20000)});
+   const response=await fetchResponse(url,init);
    if(optional404 && response.status===404) return null as T;
    if(!response.ok) throw new Error(`HTTP ${response.status}`);
    return await response.json() as T;

@@ -1,14 +1,23 @@
 #!/usr/bin/env bun
 
+import { optionValue } from "../../shared/cli";
+
+import { formatSol, LAMPORTS_PER_SOL } from "../../shared/amounts";
+export { formatSol } from "../../shared/amounts";
+
+import { localIso as formatLocalTime } from "../../shared/time";
+
 import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import { resolveRpc, rpcOptions, configPath, rpcCall } from "../../shared/operator-config";
-import { assertFundingFloor } from "./plan";
+import { createRpcContext, redactRpc } from "../../shared/operator-config";
+import {
+  assertFundingFloor,
+  IDENTITY_HARD_FLOOR as IDENTITY_HARD_FLOOR_LAMPORTS,
+  IDENTITY_EXECUTION_RESERVE as IDENTITY_EXECUTION_RESERVE_LAMPORTS,
+  type Plan,
+} from "./plan";
 
-const LAMPORTS_PER_SOL = 1_000_000_000n;
-const IDENTITY_HARD_FLOOR_LAMPORTS = 5_000_000_000n;
-const IDENTITY_EXECUTION_RESERVE_LAMPORTS = 5_001_000_000n;
 const DEFAULT_APPROVAL_DRIFT_LAMPORTS = 100_000_000n;
 const MINIMUM_FEE_PAYER_LAMPORTS = 1_000_000n;
 const EXPECTED_BONDS_PROGRAM = "vBoNdEvzMrSai7is21XgVYik65mqtaKXuSdMBJ1xkW4";
@@ -16,34 +25,7 @@ const EXPECTED_BONDS_PROGRAM = "vBoNdEvzMrSai7is21XgVYik65mqtaKXuSdMBJ1xkW4";
 const repoRoot = resolve(import.meta.dir, "../../../..");
 const plannerPath = resolve(import.meta.dir, "plan.ts");
 
-type VoteAction = "skip-below-threshold" | "withdraw-all";
-type IdentityAction = "skip-below-threshold" | "no-op-at-target" | "fund-bond";
-
-type Plan = {
-  checkedAtUtc: string;
-  checkedAtLocal: string;
-  localTimeZone: string;
-  voteAccount: string;
-  identityAccount: string;
-  voteBalanceLamports: string;
-  voteBalanceSol: string;
-  voteRentExemptLamports: string;
-  voteRentExemptSol: string;
-  voteAction: VoteAction;
-  voteTransferLamports: string;
-  voteTransferSol: string;
-  identityBalanceLamports: string;
-  identityBalanceSol: string;
-  identityTransferLamports: string;
-  identityTransferSol: string;
-  identityAction: IdentityAction;
-  projectedIdentityAfterVoteLamports: string;
-  projectedIdentityAfterVoteSol: string;
-  bondFundLamports: string;
-  bondFundSol: string;
-  expectedFinalIdentityLamports: string;
-  expectedFinalIdentitySol: string;
-};
+type VoteAction = Plan["voteAction"];
 
 type BondJson = {
   programId: string;
@@ -153,11 +135,7 @@ function usage(code = 2): never {
 }
 
 function readArg(name: string): string | undefined {
-  const index = process.argv.indexOf(name);
-  if (index === -1) return undefined;
-  const value = process.argv[index + 1];
-  if (!value || value.startsWith("--")) usage();
-  return value;
+  try { return optionValue(process.argv.slice(2), name); } catch { return usage(); }
 }
 
 function requiredArg(name: string): string {
@@ -195,30 +173,16 @@ function parseArgs(): CliArgs {
   };
 }
 
-let resolvedRpc: string | undefined;
-async function requireRpcUrl(): Promise<string> {
-  return resolvedRpc ??= (await resolveRpc(rpcOptions(process.argv.slice(2)))).rpcUrl;
-}
-
-export function redactSecrets(value: string, rpcUrl = resolvedRpc ?? process.env.SOLANA_RPC_URL): string {
-  if (rpcUrl) {
-    value = value.replaceAll(rpcUrl, "[HELIUS_RPC_REDACTED]");
-    try {
-      for (const credential of new URL(rpcUrl).searchParams.values()) {
-        if (credential) {
-          value = value.replaceAll(credential, "[RPC_CREDENTIAL_REDACTED]");
-          value = value.replaceAll(encodeURIComponent(credential), "[RPC_CREDENTIAL_REDACTED]");
-        }
-      }
-    } catch { /* Invalid configured URLs are reported without echoing the input. */ }
-  }
-  return value.replace(/https?:\/\/[^\s"'\\<>]+/gi, "[URL_REDACTED]");
+const rpcContext = createRpcContext();
+const requireRpcUrl = rpcContext.url;
+export function redactSecrets(value: string, rpcUrl?: string): string {
+  return rpcUrl === undefined ? rpcContext.redact(value) : redactRpc(value, rpcUrl);
 }
 
 async function runCommand(command: string[], label: string): Promise<{ stdout: string; stderr: string }> {
   const processHandle = Bun.spawn(command, {
     cwd: repoRoot,
-    env: {...process.env, ...(resolvedRpc ? {SOLANA_RPC_URL:resolvedRpc, VALIDATOR_OPS_CONFIG:configPath(rpcOptions(process.argv.slice(2)).config)} : {})},
+    env: await rpcContext.environment(),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -234,9 +198,7 @@ async function runCommand(command: string[], label: string): Promise<{ stdout: s
   return { stdout, stderr };
 }
 
-async function rpc<T>(method: string, params: unknown[]): Promise<T> {
-  return rpcCall(await requireRpcUrl(), method, params);
-}
+const rpc = rpcContext.rpc;
 
 async function requireReadableFile(path: string): Promise<void> {
   const details = await stat(path);
@@ -254,6 +216,8 @@ async function getPlan(args: CliArgs): Promise<Plan> {
       "--identity",
       args.identity,
       "--json",
+      "--rpc",
+      await requireRpcUrl(),
     ],
     "planner",
   );
@@ -451,14 +415,6 @@ export function parseSolLamports(value: string): bigint {
   return BigInt(match[1]) * LAMPORTS_PER_SOL + BigInt(fraction || "0");
 }
 
-export function formatSol(lamports: bigint): string {
-  const sign = lamports < 0n ? "-" : "";
-  const absolute = lamports < 0n ? -lamports : lamports;
-  return `${sign}${absolute / LAMPORTS_PER_SOL}.${(absolute % LAMPORTS_PER_SOL)
-    .toString()
-    .padStart(9, "0")}`;
-}
-
 export function calculateFundingAfterVote(
   initial: Pick<Plan, "identityAction" | "voteTransferLamports">,
   currentIdentityLamports: bigint,
@@ -575,22 +531,6 @@ async function runFundingCommand(args: CliArgs, amountSol: string, simulate: boo
     ],
     simulate ? "bond funding simulation" : "bond funding submission",
   );
-}
-
-function formatLocalTime(date: Date): string {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-    timeZoneName: "longOffset",
-  });
-  const parts = Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]));
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}${String(parts.timeZoneName).replace("GMT", "")}`;
 }
 
 async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> {

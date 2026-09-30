@@ -98,3 +98,15 @@ test("saved RPC supports executor preflight and redacts child diagnostics withou
   const plan=await run('plan.ts','rpc-error',['--vote-account','fixture-vote','--config',config],{SOLANA_RPC_URL:''});expect(plan.stderr).toContain('RPC getAccountInfo failed');expect(plan.stderr).not.toContain('TEST_ONLY');
  } finally {await rm(dir,{recursive:true,force:true});}
 });
+
+test("executor and planner share the approved endpoint despite a legacy default profile variable",async()=>{
+ const dir=await mkdtemp(join(tmpdir(),"sweep-legacy-rpc-"));const config=join(dir,"config.json");
+ try {
+  await writeFile(config,JSON.stringify({version:1,defaultProfile:'legacy',profiles:{legacy:{cluster:'mainnet-beta',identity:'11111111111111111111111111111111',voteAccount:'So11111111111111111111111111111111111111112',rpcEnv:'LEGACY_RPC',verification:{source:'helius-rpc',checkedAt:'2026-09-15T00:00:00Z'}}}}));
+  await withSignerPaths(async(args)=>{
+   const selected=`${rpc}&label=approved`;
+   const result=await run('execute.ts','planner-rpc-check',[...args,'--config',config,'--rpc',selected],{LEGACY_RPC:`${rpc}&label=legacy`,SWEEP_EXPECT_RPC:selected});
+   expect(result.code).toBe(0);expect(JSON.parse(result.stdout).mutationPerformed).toBe(false);expect(result.stdout+result.stderr).not.toContain('TEST_ONLY');
+  });
+ } finally {await rm(dir,{recursive:true,force:true});}
+});

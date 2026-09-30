@@ -77,6 +77,18 @@ test('RPC errors hide provider credentials and disable redirects', async () => {
  } finally { globalThis.fetch = original; }
 });
 
+test('SDK RPC transport omits non-OK provider bodies before SDK error formatting',async()=>{
+ const {Connection, PublicKey} = await import('@solana/web3.js');
+ const {fetchRpcResponse} = await import('./operator-config');
+ const original=globalThis.fetch;
+ try {
+  globalThis.fetch=Object.assign(async()=>new Response('PROVIDER_PRIVATE_BODY',{status:500}),{preconnect:original.preconnect});
+  const connection=new Connection(url,{disableRetryOnRateLimit:true,fetch:Object.assign(fetchRpcResponse,{preconnect:fetch.preconnect})});
+  let message='';try {await connection.getBalance(new PublicKey(identity));} catch(error){message=(error as Error).message;}
+  expect(message).toContain('RPC transport failed');expect(message).not.toContain('PROVIDER_PRIVATE_BODY');expect(message).not.toContain('TEST_ONLY');
+ } finally {globalThis.fetch=original;}
+});
+
 test('historical queries resolve an existing zero-stake vote account without active-set membership',async()=>{
  const call=async(_:string,method:string)=>method==='getGenesisHash'?MAINNET_GENESIS:method==='getVoteAccounts'?{current:[],delinquent:[]}:{value:{owner:'Vote111111111111111111111111111111111111111',data:{parsed:{type:'vote',info:{nodePubkey:identity}}}}};
  expect(await verifyValidator(vote,url,call)).toEqual({voteAccount:vote,identity});
@@ -95,7 +107,6 @@ test('configuration paths expand home and reject empty overrides',async()=>{
   expect(operatorPath('/explicit/config.json','TEST_OPERATOR_PATH','config.json')).toBe('/explicit/config.json');
  } finally { if(previous===undefined) delete process.env.TEST_OPERATOR_PATH; else process.env.TEST_OPERATOR_PATH=previous; }
 });
-
 
 test('v2 RPC precedence, whitespace fallback, explicit account settings and ambiguity', () => {
  const saved = {...profile, rpcUrl:url}; delete (saved as Partial<typeof profile>).rpcEnv;
@@ -123,4 +134,25 @@ test('saved v2 URLs round trip privately',async()=>{
   expect((await readConfig(path)).profiles.one.rpcUrl).toBe(url);
   expect((await stat(path)).mode&0o777).toBe(0o600);
  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('command RPC context resolves once and forwards the same URL and config to children', async()=>{
+ const {createRpcContext} = await import('./operator-config');
+ const dir=await mkdtemp(join(tmpdir(),'rpc-context-'));const path=join(dir,'config.json');
+ const previous=process.env.SOLANA_RPC_URL;
+ try {
+  process.env.SOLANA_RPC_URL='';
+  const {rpcEnv:_, ...fields}=profile;
+  await saveConfig({version:2,profiles:{one:{...fields,rpcUrl:url}}},path);
+  let reads=0;
+  const context=createRpcContext(()=>{reads++;return {config:path,profile:'one'};});
+  expect(await Promise.all([context.url(),context.url()])).toEqual([url,url]);
+  const replacement='https://mainnet.helius-rpc.com/?api-key=TEST_ONLY&label=replacement';
+  await saveConfig({version:2,profiles:{one:{...fields,rpcUrl:replacement}}},path);
+  const child=await context.environment();expect(child.SOLANA_RPC_URL).toBe(url);expect(child.VALIDATOR_OPS_CONFIG).toBe(path);expect(reads).toBe(1);
+  expect(context.redact(`Provider rejected TEST_ONLY at ${url}`)).not.toContain('TEST_ONLY');
+ } finally {
+  if(previous===undefined) delete process.env.SOLANA_RPC_URL;else process.env.SOLANA_RPC_URL=previous;
+  await rm(dir,{recursive:true,force:true});
+ }
 });
