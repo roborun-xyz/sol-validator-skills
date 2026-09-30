@@ -2,11 +2,12 @@
 
 import { simulateBids } from "./model";
 
-import { heliusUrl } from "../../shared/operator-config.ts";
+import { resolveRpc, rpcOptions, redactRpc } from "../../shared/operator-config.ts";
 
 import { Connection, PublicKey } from "@solana/web3.js";
 
-const configuredRpc = () => heliusUrl(process.env.SOLANA_RPC_URL);
+let resolvedRpc: string | undefined;
+const configuredRpc = async () => resolvedRpc ??= (await resolveRpc(rpcOptions(process.argv.slice(2)))).rpcUrl;
 
 const GAUGE_PROGRAM = new PublicKey("GaugesLJrnVjNNWLReiw3Q7xQhycSBRgeHGTMDUaX231");
 const VAULT_GAUGEMEISTER = new PublicKey("HniSajyYDYEfdbNfW8L5Eq8W1pxt8XsYDgc6TNsx7t6x");
@@ -35,7 +36,7 @@ function argValue(name: string): string | undefined {
 }
 
 function usage(code = 2): never {
-  console.error(`Usage: bun scripts/simulate.ts --epoch <current|N> --gauge <GAUGE> --bids 10,20,50 [options]`);
+  console.error(`Usage: bun scripts/simulate.ts --epoch <current|N> --gauge <GAUGE> --bids 10,20,50 [options] [--rpc URL] [--config PATH] [--profile NAME]`);
   process.exit(code);
 }
 
@@ -49,7 +50,7 @@ function num(name: string, fallback?: number): number | undefined {
 
 function parseArgs(): Args {
   if (process.argv.includes("--help")) usage(0);
-  const allowed=new Set(['--epoch','--gauge','--bids','--format','--current-bid','--other-bids','--total-vev','--total-gauge-vev','--match-multiplier','--lamports-per-staked-sol','--sol-usd']);
+  const allowed=new Set(['--epoch','--gauge','--bids','--format','--current-bid','--other-bids','--total-vev','--total-gauge-vev','--match-multiplier','--lamports-per-staked-sol','--sol-usd','--rpc','--config','--profile']);
   const seen=new Set<string>();
   const raw=process.argv.slice(2);
   for(let i=0;i<raw.length;i++) {
@@ -160,7 +161,7 @@ async function totalEpochGaugeVev(connection: Connection, epoch: number): Promis
 
 async function main() {
 const args = parseArgs();
-const connection = new Connection(configuredRpc(), {commitment:"confirmed",disableRetryOnRateLimit:true,fetch:Object.assign(async(input:Parameters<typeof fetch>[0],init?:Parameters<typeof fetch>[1])=>{
+const connection = new Connection((await configuredRpc()), {commitment:"confirmed",disableRetryOnRateLimit:true,fetch:Object.assign(async(input:Parameters<typeof fetch>[0],init?:Parameters<typeof fetch>[1])=>{
  try {const response=await fetch(input,{...init,redirect:'error',signal:AbortSignal.timeout(20000)});if(!response.ok) throw new Error();return response;}
  catch {throw new Error('RPC transport failed; URL omitted');}
 },{preconnect:fetch.preconnect})});
@@ -239,7 +240,6 @@ if (args.format === "json") {
 }
 if(import.meta.main) main().catch(error=>{
  let message=error instanceof Error?error.message:String(error);
- const url=process.env.SOLANA_RPC_URL;
- if(url) {message=message.replaceAll(url,'<RPC>');try {const key=new URL(url).searchParams.get('api-key');if(key) message=message.replaceAll(key,'<KEY>');}catch{}}
+ message=redactRpc(message,resolvedRpc);
  console.error(message);process.exit(1);
 });

@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { selectInput, verifyValidator, saveConfig, readConfig, MAINNET_GENESIS, rpcCall, resolveOperator, type Config } from './operator-config';
+import { selectInput, verifyValidator, saveConfig, readConfig, MAINNET_GENESIS, rpcCall, resolveOperator, selectRpc, validateConfig, redactRpc, type Config } from './operator-config';
 const vote='R2D2vs3bJwpNF2ejaB6UW1JdCZ5VstuAmuwxDuUUWNj';
 const identity='R2D2imoV8nXk1ngT9v4dEK65We4uLNyUarTBdWbFruq';
 const url='https://mainnet.helius-rpc.com/?api-key=TEST_ONLY';
@@ -94,4 +94,33 @@ test('configuration paths expand home and reject empty overrides',async()=>{
   expect(()=>operatorPath(undefined,'TEST_OPERATOR_PATH','config.json')).toThrow('Empty configuration path');
   expect(operatorPath('/explicit/config.json','TEST_OPERATOR_PATH','config.json')).toBe('/explicit/config.json');
  } finally { if(previous===undefined) delete process.env.TEST_OPERATOR_PATH; else process.env.TEST_OPERATOR_PATH=previous; }
+});
+
+
+test('v2 RPC precedence, whitespace fallback, explicit account settings and ambiguity', () => {
+ const saved = {...profile, rpcUrl:url}; delete (saved as Partial<typeof profile>).rpcEnv;
+ const cfg: Config = {version:2, profiles:{one:saved}};
+ expect(selectRpc({},cfg,{}).rpcSource).toBe('config');
+ expect(selectRpc({},cfg,{SOLANA_RPC_URL:'  '}).rpcUrl).toBe(url);
+ const other='https://mainnet.helius-rpc.com/?api-key=TEST_ONLY&label=OTHER_TEST';
+ expect(selectRpc({},cfg,{SOLANA_RPC_URL:other}).rpcUrl).toBe(other);
+ expect(selectRpc({rpcUrl:url},cfg,{SOLANA_RPC_URL:other}).rpcUrl).toBe(url);
+ expect(()=>selectRpc({},cfg,{SOLANA_RPC_URL:'invalid'})).toThrow('Invalid RPC');
+ expect(selectInput({validator:identity},cfg,{}).target).toBe(identity);
+ expect(selectInput({validator:identity},cfg,{}).rpcUrl).toBe(url);
+ expect(()=>selectRpc({}, {...cfg,profiles:{one:saved,two:saved}},{})).toThrow('PROFILE_REQUIRED');
+ expect(selectRpc({}, {...cfg,profiles:{one:saved,two:saved}}, {SOLANA_RPC_URL:url}).rpcUrl).toBe(url);
+ expect(()=>validateConfig({version:2,profiles:{one:profile}})).toThrow();
+ expect(()=>validateConfig({version:2,profiles:{one:{...saved,rpcUrl:42}}})).toThrow();
+ expect(redactRpc(`Provider rejected ${url}; TEST_ONLY`,url)).not.toContain('TEST_ONLY');
+});
+
+test('saved v2 URLs round trip privately',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'operator-v2-')); const path=join(dir,'config.json');
+ try {
+  const {rpcEnv:_,...fields}=profile;
+  await saveConfig({version:2,profiles:{one:{...fields,rpcUrl:url}}},path);
+  expect((await readConfig(path)).profiles.one.rpcUrl).toBe(url);
+  expect((await stat(path)).mode&0o777).toBe(0o600);
+ } finally {await rm(dir,{recursive:true,force:true});}
 });

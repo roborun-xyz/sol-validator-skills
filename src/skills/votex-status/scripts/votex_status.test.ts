@@ -1,12 +1,14 @@
 import { test, expect } from "bun:test";
-import { resolve } from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
-async function run(mode: string) {
+async function run(mode: string, extra:Record<string,string>={}) {
   const proc = Bun.spawn([
     process.execPath, "--preload", resolve(import.meta.dir, "fixtures/offline-preload.ts"),
     resolve(import.meta.dir, "votex_status.ts"), "100", "--json", "--no-names", "--max-pages=2",
   ], {
-    env: { ...process.env, VOTEX_FIXTURE_MODE: mode, SOLANA_RPC_URL: "https://mainnet.helius-rpc.com/?api-key=TEST_ONLY" },
+    env: { ...process.env, VOTEX_FIXTURE_MODE: mode, SOLANA_RPC_URL: "https://mainnet.helius-rpc.com/?api-key=TEST_ONLY", ...extra },
     stdout: "pipe", stderr: "pipe",
   });
   const [stdout, stderr, code] = await Promise.all([
@@ -49,4 +51,13 @@ test("failed transactions do not contribute bids", async () => {
   const result = await run("failed-tx");
   expect(result.code).toBe(0);
   expect(JSON.parse(result.stdout).totalUsdcRaw).toBe("0");
+});
+
+
+test("saved profile RPC supports an on-chain scan with no session environment URL",async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'votex-config-'));const config=join(dir,'config.json');
+ try {
+  await writeFile(config,JSON.stringify({version:2,profiles:{saved:{cluster:'mainnet-beta',identity:'11111111111111111111111111111111',voteAccount:'So11111111111111111111111111111111111111112',rpcUrl:'https://mainnet.helius-rpc.com/?api-key=TEST_ONLY',verification:{source:'helius-rpc',checkedAt:'2026-09-15T00:00:00Z'}}}}));
+  const result=await run('valid',{SOLANA_RPC_URL:'',VALIDATOR_OPS_CONFIG:config});expect(result.code).toBe(0);expect(JSON.parse(result.stdout).totalUsdcRaw).toBe('150000000');expect(result.stdout+result.stderr).not.toContain('TEST_ONLY');
+ } finally {await rm(dir,{recursive:true,force:true});}
 });

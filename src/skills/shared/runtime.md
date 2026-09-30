@@ -1,6 +1,6 @@
 ---
 created: 2026-09-16
-last_updated: 2026-09-26
+last_updated: 2026-09-30
 ---
 
 # Installed bundle and operator configuration
@@ -33,8 +33,8 @@ Install dependencies with `bun install --frozen-lockfile` in `BUNDLE_ROOT` when 
 
 Precedence is explicit CLI/operator path, then the corresponding environment variable, then the user-level default. `--hosts` on status inspects the file only; it does not persist the selection for later host operations. TypeScript and Python expand `~/`; prefer absolute paths for persistent overrides. Empty overrides are errors, not a request to select the current directory. Do not automatically discover project configs or choose another fleet when a selected file is missing or invalid.
 
-Run onboarding's `onboard.ts status` to inspect all three resolved paths without network calls. It reports profile schema validity and whether referenced RPC variables are set, validates fleet with the SFDP schema when Python is available, and checks host Markdown readability/date fields. Status reports diagnostics even if files are missing or invalid; inspect its per-file statuses rather than treating exit code zero as readiness. No status result proves live identities, host health, backup readiness or permission to mutate.
+Run onboarding's `onboard.ts status` to inspect all three resolved paths without network calls. It reports profile schema validity and whether a usable RPC override or saved URL exists, and its source, validates fleet with the SFDP schema when Python is available, and checks host Markdown readability/date fields. Status reports diagnostics even if files are missing or invalid; inspect its per-file statuses rather than treating exit code zero as readiness. No status result proves live identities, host health, backup readiness or permission to mutate.
 
 Read only the configurations needed for the current task, reuse existing entries, and ask only for missing facts. Profiles do not need fleet or hosts. SFDP participation does not need SSH or host inventory. Upgrades require reviewed `hosts.md` plus live preflight; an SFDP fleet entry is insufficient.
 
-Secrets belong in runtime environment variables or an operator-managed secret store. A `.env` in an arbitrary session directory is not a portable credential source: load an operator-designated file explicitly or supply the environment to the process, without printing values or copying it into the installed bundle. Configuration stores public identifiers and environment variable names, never credentials or execution approvals.
+RPC URLs may be persisted in private operator configuration after onboarding; other secrets belong in runtime environment variables or an operator-managed secret store. A `.env` in an arbitrary session directory is not a portable credential source: load an operator-designated file explicitly or supply the environment to the process, without printing values or copying it into the installed bundle. Version 2 profiles store public identifiers and private `rpcUrl` values, with no `rpcEnv` field or execution approvals. Resolve RPC as `--rpc` → `SOLANA_RPC_URL` → selected profile URL; blank environment values fall back. Legacy version 1 environment references remain readable until explicit migration. Status reports only public fields and RPC availability/source, never URLs. Keep credential-bearing configuration outside the repository and installed bundle with mode 0600.

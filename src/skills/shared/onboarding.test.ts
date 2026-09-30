@@ -4,22 +4,26 @@ import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 const script=resolve(import.meta.dir,'../onboarding/scripts/onboard.ts');
 const fixture=resolve(import.meta.dir,'fixtures/rpc-preload.ts');
-test('first-use CLI verifies and persists public fields; errors leave config intact',async()=>{
+test('first-use CLI persists verified RPC privately and revenue reuses it in a fresh session',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'onboard-cli-'));const path=join(dir,'config.json');
  const run=async(args:string[],extra:Record<string,string>={})=>{
-  const proc=Bun.spawn([process.execPath,'--preload',fixture,script,...args,'--config',path],{env:{...process.env,VALIDATOR_OPS_FLEET:join(dir,'absent-fleet.json'),VALIDATOR_OPS_HOST_INVENTORY:join(dir,'absent-hosts.md'),MY_FIXTURE_RPC:'https://mainnet.helius-rpc.com/?api-key=TEST_ONLY',...extra},stdout:'pipe',stderr:'pipe'});
+  const proc=Bun.spawn([process.execPath,'--preload',fixture,script,...args,'--config',path],{env:{...process.env,VALIDATOR_OPS_FLEET:join(dir,'absent-fleet.json'),VALIDATOR_OPS_HOST_INVENTORY:join(dir,'absent-hosts.md'),MY_FIXTURE_RPC:'https://mainnet.helius-rpc.com/?api-key=TEST_ONLY',SOLANA_RPC_URL:'https://mainnet.helius-rpc.com/?api-key=TEST_ONLY',...extra},stdout:'pipe',stderr:'pipe'});
   const [out,err,code]=await Promise.all([new Response(proc.stdout).text(),new Response(proc.stderr).text(),proc.exited]);return{out,err,code};
  };
  try {
-  const add=['add','--profile','mine','--validator','11111111111111111111111111111111','--rpc-env','MY_FIXTURE_RPC'];
+  const add=['add','--profile','mine','--validator','11111111111111111111111111111111'];
   expect((await run(add,{FIXTURE_WRONG_NETWORK:'1'})).code).toBe(1);
   expect(await Bun.file(path).exists()).toBe(false);
   const ok=await run(add);expect(ok.code).toBe(0);expect(ok.out).not.toContain('TEST_ONLY');
-  const saved=await readFile(path,'utf8');expect(saved).not.toContain('TEST_ONLY');expect((await stat(path)).mode&0o777).toBe(0o600);
+  const saved=await readFile(path,'utf8');expect(JSON.parse(saved).version).toBe(2);expect(JSON.parse(saved).profiles.mine.rpcEnv).toBeUndefined();expect(JSON.parse(saved).profiles.mine.rpcUrl).toContain('TEST_ONLY');expect((await stat(path)).mode&0o777).toBe(0o600);
   expect((await run(add)).code).toBe(1);expect(await readFile(path,'utf8')).toBe(saved);
   const status=await run(['status']);expect(status.code).toBe(0);expect(JSON.parse(status.out).rpcConfigured.mine).toBe(true);
   const missing=await run(['refresh','--profile','mine'],{MY_FIXTURE_RPC:'',SOLANA_RPC_URL:'https://mainnet.helius-rpc.com/?api-key=TEST_ONLY'});
-  expect(missing.code).toBe(1);expect(missing.err).toContain('MY_FIXTURE_RPC');expect(await readFile(path,'utf8')).toBe(saved);
+  expect(missing.code).toBe(0);expect(missing.out).not.toContain('TEST_ONLY');expect(JSON.parse(await readFile(path,'utf8')).profiles.mine.rpcUrl).toBe(JSON.parse(saved).profiles.mine.rpcUrl);
+  const freshStatus=await run(['status'],{SOLANA_RPC_URL:'',MY_FIXTURE_RPC:''});expect(freshStatus.out).not.toContain('TEST_ONLY');expect(JSON.parse(freshStatus.out).rpcSource.mine).toBe('config');
+  const revenue=Bun.spawn([process.execPath,'--preload',fixture,resolve(import.meta.dir,'../validator-revenue/scripts/revenue.ts'),'--epochs','1','--format','json'],{cwd:dir,env:{...process.env,SOLANA_RPC_URL:'',VALIDATOR_OPS_CONFIG:path},stdout:'pipe',stderr:'pipe'});
+  const [out,err,code]=await Promise.all([new Response(revenue.stdout).text(),new Response(revenue.stderr).text(),revenue.exited]);
+  expect(err).toBe('');expect(code).toBe(0);expect(JSON.parse(out).rows[0].epoch).toBe(100);expect(out).not.toContain('TEST_ONLY');
  } finally {await rm(dir,{recursive:true,force:true});}
 });
 
@@ -63,5 +67,29 @@ test('fresh HOME defaults resolve outside cwd and profile status survives absent
   const files=JSON.parse(out).files;
   expect(files.profiles.path).toBe(join(home,'.config/validator-ops/config.json'));
   expect(files.profiles.status).toBe('valid');expect(files.fleet.status).toBe('unchecked');expect(files.hosts.status).toBe('missing');
+ } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('explicit legacy migration is atomic and identity refresh preserves saved URLs',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'onboard-migrate-'));const path=join(dir,'config.json');
+ const url='https://mainnet.helius-rpc.com/?api-key=TEST_ONLY';
+ const profile={cluster:'mainnet-beta',voteAccount:'So11111111111111111111111111111111111111112',identity:'11111111111111111111111111111111',rpcEnv:'LEGACY_RPC',verification:{source:'helius-rpc',checkedAt:'2026-09-15T00:00:00Z'}};
+ const run=async(args:string[],extra:Record<string,string>={})=>{
+  const proc=Bun.spawn([process.execPath,'--preload',fixture,script,...args,'--config',path],{cwd:dir,env:{...process.env,SOLANA_RPC_URL:'',LEGACY_RPC:url,...extra},stdout:'pipe',stderr:'pipe'});
+  const [out,err,code]=await Promise.all([new Response(proc.stdout).text(),new Response(proc.stderr).text(),proc.exited]);return {out,err,code};
+ };
+ try {
+  await Bun.write(path,JSON.stringify({version:1,defaultProfile:'one',profiles:{one:profile,two:{...profile,rpcEnv:'MISSING_LEGACY_RPC'}}}));
+  const before=await readFile(path,'utf8');
+  const missing=await run(['migrate'],{MISSING_LEGACY_RPC:''});expect(missing.code).toBe(1);expect(await readFile(path,'utf8')).toBe(before);
+  const wrong=await run(['migrate'],{MISSING_LEGACY_RPC:url,FIXTURE_WRONG_NETWORK:'1'});expect(wrong.code).toBe(1);expect(await readFile(path,'utf8')).toBe(before);
+  const refresh=await run(['refresh','--profile','one']);expect(refresh.code).toBe(0);
+  const mixed=JSON.parse(await readFile(path,'utf8'));expect(mixed.version).toBe(1);expect(mixed.profiles.one.rpcEnv).toBeUndefined();expect(mixed.profiles.two.rpcEnv).toBe('MISSING_LEGACY_RPC');
+  const ok=await run(['migrate'],{MISSING_LEGACY_RPC:url});expect(ok.code).toBe(0);expect(ok.out).not.toContain('TEST_ONLY');
+  const migrated=JSON.parse(await readFile(path,'utf8'));expect(migrated.version).toBe(2);expect(migrated.defaultProfile).toBe('one');expect(migrated.profiles.two.rpcEnv).toBeUndefined();expect(migrated.profiles.two.rpcUrl).toBe(url);
+  const unchanged=await run(['refresh','--profile','one'],{SOLANA_RPC_URL:'https://mainnet.helius-rpc.com/?api-key=TEST_ONLY&label=SESSION_OVERRIDE'});expect(unchanged.code).toBe(0);expect(JSON.parse(await readFile(path,'utf8')).profiles.one.rpcUrl).toBe(url);
+  const changed=await run(['refresh','--profile','one','--rpc','https://mainnet.helius-rpc.com/?api-key=TEST_ONLY&label=EXPLICIT_UPDATE']);expect(changed.code).toBe(0);expect(changed.out).not.toContain('EXPLICIT_UPDATE');expect(JSON.parse(await readFile(path,'utf8')).profiles.one.rpcUrl).toContain('EXPLICIT_UPDATE');
+  const drift=JSON.parse(await readFile(path,'utf8'));drift.profiles.one.identity=drift.profiles.one.voteAccount;await Bun.write(path,JSON.stringify(drift));
+  const driftBefore=await readFile(path,'utf8');expect((await run(['migrate'])).err).toContain('PROFILE_CONFLICT');expect(await readFile(path,'utf8')).toBe(driftBefore);
  } finally {await rm(dir,{recursive:true,force:true});}
 });

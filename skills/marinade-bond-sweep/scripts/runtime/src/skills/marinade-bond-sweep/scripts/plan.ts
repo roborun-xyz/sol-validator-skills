@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { heliusUrl, rpcCall } from "../../shared/operator-config";
+import { resolveRpc, rpcOptions, rpcCall } from "../../shared/operator-config";
 
 const LAMPORTS_PER_SOL = 1_000_000_000n;
 const VOTE_THRESHOLD = 1n * LAMPORTS_PER_SOL;
@@ -60,7 +60,7 @@ export type SweepActions = {
 
 function usage(code = 2): never {
   console.error(
-    "Usage: bun plan.ts --vote-account <PUBKEY> [--identity <EXPECTED_PUBKEY>] [--json] [--field <PLAN_FIELD>]",
+    "Usage: bun plan.ts --vote-account <PUBKEY> [--identity <EXPECTED_PUBKEY>] [--json] [--rpc URL] [--config PATH] [--profile NAME] [--field <PLAN_FIELD>]",
   );
   process.exit(code);
 }
@@ -162,7 +162,7 @@ async function main() {
   const asJson = process.argv.includes("--json");
   if (!voteAccount) usage();
 
-  const rpcUrl = heliusUrl(process.env.SOLANA_RPC_URL);
+  const rpcUrl = (await resolveRpc(rpcOptions(process.argv.slice(2)))).rpcUrl;
 
   const voteInfoResult = await rpc<{ context: { slot: number }; value: AccountInfo | null }>(
     rpcUrl,

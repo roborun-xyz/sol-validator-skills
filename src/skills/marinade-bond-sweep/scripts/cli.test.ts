@@ -7,9 +7,9 @@ import { redactSecrets } from "./execute";
 const fixture = resolve(import.meta.dir, "fixtures/offline-preload.ts");
 const rpc = "https://mainnet.helius-rpc.com/?api-key=TEST_ONLY";
 
-async function run(script: string, mode: string, args: string[]) {
+async function run(script: string, mode: string, args: string[], extra: Record<string,string> = {}) {
   const proc = Bun.spawn([process.execPath, "--preload", fixture, resolve(import.meta.dir, script), ...args], {
-    env: { ...process.env, SOLANA_RPC_URL: rpc, SWEEP_FIXTURE_MODE: mode },
+    env: { ...process.env, SOLANA_RPC_URL: rpc, SWEEP_FIXTURE_MODE: mode, ...extra },
     stdout: "pipe", stderr: "pipe",
   });
   const [stdout, stderr, code] = await Promise.all([
@@ -83,4 +83,18 @@ test("executor redacts configured credentials in child-process diagnostics", asy
   });
   const reorderedUrl = "https://mainnet.helius-rpc.com/?commitment=finalized&api-key=TEST_ONLY";
   expect(redactSecrets(`Rejected TEST_ONLY at ${reorderedUrl}`, rpc)).not.toContain("TEST_ONLY");
+});
+
+
+test("saved RPC supports executor preflight and redacts child diagnostics without an environment URL",async()=>{
+ const dir=await mkdtemp(join(tmpdir(),"sweep-config-"));const config=join(dir,"config.json");
+ try {
+  await writeFile(config,JSON.stringify({version:2,profiles:{saved:{cluster:'mainnet-beta',identity:'11111111111111111111111111111111',voteAccount:'So11111111111111111111111111111111111111112',rpcUrl:rpc,verification:{source:'helius-rpc',checkedAt:'2026-09-15T00:00:00Z'}}}}));
+  await withSignerPaths(async(args)=>{
+   const options=[...args,'--config',config,'--profile','saved'];
+   const ok=await run('execute.ts','safe-plan',options,{SOLANA_RPC_URL:''});expect(ok.code).toBe(0);expect(ok.stdout).not.toContain('TEST_ONLY');
+   const failed=await run('execute.ts','cli-error',options,{SOLANA_RPC_URL:''});expect(failed.code).toBe(1);expect(failed.stderr).toContain('validator-bonds show-bond failed');expect(failed.stdout+failed.stderr).not.toContain('TEST_ONLY');
+  });
+  const plan=await run('plan.ts','rpc-error',['--vote-account','fixture-vote','--config',config],{SOLANA_RPC_URL:''});expect(plan.stderr).toContain('RPC getAccountInfo failed');expect(plan.stderr).not.toContain('TEST_ONLY');
+ } finally {await rm(dir,{recursive:true,force:true});}
 });

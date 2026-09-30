@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { heliusUrl, rpcCall } from "../../shared/operator-config.ts";
+import { resolveRpc, rpcOptions, redactRpc, rpcCall } from "../../shared/operator-config.ts";
 
 import { base58Encode, base58Decode } from "../../shared/base58";
 import { fetchJson } from "../../shared/http";
@@ -14,14 +14,15 @@ const epochOnly = process.argv.includes("--epoch-only");
 const maxPagesArg = process.argv.find((arg) => arg.startsWith("--max-pages="));
 const maxPages = maxPagesArg ? Number(maxPagesArg.split("=")[1]) : 20;
 const localTimeZone = process.env.LOCAL_TIME_ZONE ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-const configuredRpc = () => heliusUrl(process.env.SOLANA_RPC_URL);
+let resolvedRpc: string | undefined;
+const configuredRpc = async () => resolvedRpc ??= (await resolveRpc(rpcOptions(process.argv.slice(2)))).rpcUrl;
 
 function isCurrentEpochArg(value: string | undefined): boolean {
   return value === "current" || value === "now";
 }
 
 function printUsage() {
-  console.error("Usage: bun scripts/votex_status.ts <epochId|current> [--json] [--no-names] [--epoch-only] [--max-pages=N]");
+  console.error("Usage: bun scripts/votex_status.ts <epochId|current> [--json] [--no-names] [--epoch-only] [--max-pages=N] [--rpc URL] [--config PATH] [--profile NAME]");
 }
 
 if (process.argv.includes("--help")) { printUsage(); process.exit(0); }
@@ -104,11 +105,11 @@ type ComputedRow = {
 const increaseVoteBuyDiscriminator = createHash("sha256").update("global:increase_vote_buy").digest().subarray(0, 8);
 
 async function rpc<T>(method: string, params: unknown): Promise<T> {
-  return rpcCall(configuredRpc(), method, params);
+  return rpcCall((await configuredRpc()), method, params);
 }
 
 async function rpcBatch<T>(calls: Array<{ method: string; params: unknown }>): Promise<T[]> {
-  const json = await fetchJson<any[]>(configuredRpc(), {
+  const json = await fetchJson<any[]>((await configuredRpc()), {
     method: "POST",
     headers: {"content-type":"application/json"},
     body: JSON.stringify(calls.map((call,id)=>({jsonrpc:"2.0",id,method:call.method,params:call.params}))),
@@ -504,7 +505,7 @@ try {
   else if (!response.ok) throw new Error(`Failed to fetch stats for The Vault epoch ${targetEpoch}: HTTP ${response.status}`);
   else result = await buildFromPublishedStats(response);
 } catch (error) {
-  console.error(error instanceof Error ? error.message : error);
+  console.error(redactRpc(error instanceof Error ? error.message : String(error), resolvedRpc));
   process.exit(1);
 }
 

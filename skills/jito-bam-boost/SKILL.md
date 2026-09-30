@@ -5,21 +5,21 @@ license: MIT
 compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC. Approved claims also require Git, Cargo, Solana CLI and an operator-owned local signer.
 metadata:
   created: "2026-08-29"
-  last_updated: "2026-09-25"
+  last_updated: "2026-09-30"
 ---
 
 # Jito BAM Boost
 
 Read [installed bundle and configuration](references/shared-runtime.md) before running commands. Resolve paths from this loaded SKILL.md, not the session working directory.
 
-Set `SOLANA_RPC_URL` in the local runtime to your Helius mainnet URL. No RPC credential is bundled. Run `bun install --frozen-lockfile` from the resolved bundle root before first use.
+Resolve Helius RPC as `--rpc URL` → nonblank `SOLANA_RPC_URL` → the selected/default/sole profile’s saved URL. Use `--config PATH` and `--profile NAME` to select operator configuration; configure missing URLs through [onboarding](references/onboarding.md). No RPC credential is bundled. Run `bun install --frozen-lockfile` from the resolved bundle root before first use.
 
 Check BAM Boost allocations read-only by default. Claim only after the operator explicitly approves the exact identity, claim epoch, and JitoSOL amount. The validator identity is the claimant, transaction signer, fee payer, and destination token-account owner.
 
 ## Resolve the validator
 
-1. Use `--profile NAME` (or the selected default profile) for a current validator. If no profile is configured, follow `references/onboarding.md` and resume the query. The checker verifies the live vote/identity relationship and uses that profile's RPC environment variable.
-2. Use `--identity PUBKEY` only for an explicitly identified claimant. Historical identities need not still be active validators. Host aliases are not accepted. `--profile NAME --identity PUBKEY` uses the profile's RPC environment reference but queries the explicit claimant without changing the profile.
+1. Use `--profile NAME` (or the selected default profile) for a current validator. If no profile is configured, follow `references/onboarding.md` and resume the query. The checker verifies the live vote/identity relationship and uses the shared RPC precedence.
+2. Use `--identity PUBKEY` only for an explicitly identified claimant. Historical identities need not still be active validators. Host aliases are not accepted. `--profile NAME --identity PUBKEY` uses the shared RPC selection but queries the explicit claimant without changing the profile.
 3. For a claim, re-check relevant live state and request the path of the identity keypair already held on the operator machine. Never retrieve a signer from a validator host or guess another operator's path.
 4. Validate the local keypair with `solana-keygen pubkey`; never print, parse, copy, or store its contents. The pubkey must equal the approved claimant identity.
 
@@ -67,7 +67,7 @@ Ask for explicit approval immediately before signing. Approval is valid only for
 
 The bundled wrapper pins Jito's official `jito-bam-boost-cli` source to commit `1fbca8059eb13f6120b12b8b77d51dfb1013a2d6`, verifies the checkout, builds it with Cargo's lockfile, repeats the finalized preflight, and refuses to submit unless the exact approved lamport amount matches.
 
-The claim wrapper takes an explicit identity and reads `SOLANA_RPC_URL`; if discovery used a custom profile RPC variable, configure the same URL in `SOLANA_RPC_URL` locally without displaying it. After approval, claim one epoch at a time from the local operator machine:
+The claim wrapper takes an explicit identity and supports the same RPC/config/profile selection as discovery. Use the same endpoint for discovery and claim without displaying credentials. After approval, claim one epoch at a time from the local operator machine:
 
 ```bash
 bun src/skills/jito-bam-boost/scripts/claim.ts \

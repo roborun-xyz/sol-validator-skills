@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC.
 metadata:
   created: "2026-05-27"
-  last_updated: "2026-09-28"
+  last_updated: "2026-09-30"
 ---
 
 # Validator Revenue
@@ -42,6 +42,6 @@ Report the completed epoch range, bond status, per-epoch revenue components, off
 
 ## Local profiles and first use
 
-Pass `--profile NAME` and optionally `--config PATH` to reuse a verified local validator. Without an explicit account or profile, use the configured default or sole profile. Several profiles without a default require an explicit selection. `--vote-account` / `--validator` override the saved target for this run only; an explicitly selected profile still supplies its RPC environment reference.
+Pass `--profile NAME` and optionally `--config PATH` to reuse a verified local validator. Without an explicit account or profile, use the configured default or sole profile. Several profiles without a default require an explicit selection. `--vote-account` / `--validator` override the saved target for this run only; an explicitly selected profile still supplies its RPC configuration.
 
-If configuration or RPC credentials are missing, follow `references/onboarding.md` configuration setup or repair, ask only for missing fields, then resume the requested check. SSH and signing keys are unnecessary. `SOLANA_RPC_URL` remains supported for account-only commands; configure it locally rather than pasting API keys into chat. The resolver checks mainnet and the live vote/identity pair; an identity change in a saved profile requires an explicit profile refresh through onboarding. Explicit inputs must resolve to a unique active validator or an existing on-chain vote account. Existing zero-stake vote accounts are supported for historical queries; a retired identity without an active mapping requires its vote account.
+If configuration or RPC credentials are missing, follow `references/onboarding.md` configuration setup or repair, ask only for missing fields, then resume the requested check. SSH and signing keys are unnecessary. `SOLANA_RPC_URL` remains supported for account-only commands; when unset or blank, reuse the selected/default/sole profile’s saved URL. Ordinary query overrides do not persist; never print API keys. The resolver checks mainnet and the live vote/identity pair; an identity change in a saved profile requires an explicit profile refresh through onboarding. Explicit inputs must resolve to a unique active validator or an existing on-chain vote account. Existing zero-stake vote accounts are supported for historical queries; a retired identity without an active mapping requires its vote account.

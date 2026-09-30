@@ -5,14 +5,14 @@ license: MIT
 compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC.
 metadata:
   created: "2026-05-31"
-  last_updated: "2026-09-25"
+  last_updated: "2026-09-30"
 ---
 
 # Votex Status
 
 Read [installed bundle and configuration](../shared/runtime.md) before running commands. Resolve paths from this loaded SKILL.md, not the session working directory.
 
-Set `SOLANA_RPC_URL` in the local runtime to your Helius mainnet URL. No RPC credential is bundled. Run `bun install --frozen-lockfile` from the resolved bundle root before first use.
+Resolve Helius RPC as `--rpc URL` → nonblank `SOLANA_RPC_URL` → the selected/default/sole profile’s saved URL. Use `--config PATH` and `--profile NAME` to select operator configuration; configure missing URLs through [onboarding](../onboarding/instructions.md). No RPC credential is bundled. Run `bun install --frozen-lockfile` from the resolved bundle root before first use.
 
 Run from the resolved bundle root:
 

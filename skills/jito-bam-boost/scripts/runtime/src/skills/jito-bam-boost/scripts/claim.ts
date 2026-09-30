@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { heliusUrl } from "../../shared/operator-config.ts";
+import { resolveRpc, rpcOptions, redactRpc } from "../../shared/operator-config.ts";
 
 import { access, mkdir, stat } from "node:fs/promises";
 import { constants } from "node:fs";
@@ -11,7 +11,8 @@ import { checkBamBoost } from "./check.ts";
 const OFFICIAL_REPO = "https://github.com/jito-foundation/jito-bam-boost-cli.git";
 const PINNED_COMMIT = "1fbca8059eb13f6120b12b8b77d51dfb1013a2d6";
 const BAM_PROGRAM = "BoostxbPp2ENYHGcTLYt1obpcY13HE4NojdqNWdzqSSb";
-const configuredRpc = () => heliusUrl(process.env.SOLANA_RPC_URL);
+let resolvedRpc: string | undefined;
+const configuredRpc = async () => resolvedRpc ??= (await resolveRpc(rpcOptions(process.argv.slice(2)))).rpcUrl;
 const MIN_IDENTITY_BALANCE_LAMPORTS = 10_000_000n;
 
 type Options = {
@@ -45,7 +46,7 @@ async function run(
     cwd: options.cwd,
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, ...options.env },
+    env: { ...process.env, ...(resolvedRpc ? {SOLANA_RPC_URL:resolvedRpc} : {}), ...options.env },
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(child.stdout).text(),
@@ -53,12 +54,12 @@ async function run(
     child.exited,
   ]);
   if (options.stream) {
-    if (stdout) process.stdout.write(stdout.replaceAll(configuredRpc(), "<HELIUS_RPC>"));
-    if (stderr) process.stderr.write(stderr.replaceAll(configuredRpc(), "<HELIUS_RPC>"));
+    if (stdout) process.stdout.write(redactRpc(stdout, resolvedRpc));
+    if (stderr) process.stderr.write(redactRpc(stderr, resolvedRpc));
   }
   if (exitCode !== 0) {
     const details = (stderr.trim() || stdout.trim()).replaceAll(
-      configuredRpc(),
+      (await configuredRpc()),
       "<HELIUS_RPC>",
     );
     throw new Error(
@@ -130,7 +131,7 @@ async function ensureOfficialCli(requestedDir?: string): Promise<string> {
 function parseOptions(): Options {
   const args = process.argv.slice(2);
   if (args.includes("--help")) {
-    console.log("Usage: bun scripts/claim.ts --identity PUBKEY --claim-epoch N --expected-amount-lamports N --keypair PATH --execute [--cli-dir PATH]\nRequires SOLANA_RPC_URL (Helius). Submits a mainnet claim only with --execute.");
+    console.log("Usage: bun scripts/claim.ts --identity PUBKEY --claim-epoch N --expected-amount-lamports N --keypair PATH --execute [--cli-dir PATH]\nRPC: --rpc, SOLANA_RPC_URL, or saved profile; --config and --profile select configuration. Submits a mainnet claim only with --execute.");
     process.exit(0);
   }
   let identity = "";
@@ -160,6 +161,8 @@ function parseOptions(): Options {
       index++;
     } else if (arg === "--cli-dir" && next) {
       cliDir = resolve(next);
+      index++;
+    } else if (["--rpc", "--config", "--profile"].includes(arg) && next && !next.startsWith("--")) {
       index++;
     } else if (arg === "--execute") {
       execute = true;
@@ -198,7 +201,7 @@ function extractSignature(output: string): string | null {
 
 try {
   const options = parseOptions();
-  configuredRpc(); // Fail before reading signers or building the external CLI.
+  (await configuredRpc()); // Fail before reading signers or building the external CLI.
   await access(options.keypair, constants.R_OK);
   const keypairPubkey = (
     await run(["solana-keygen", "pubkey", options.keypair])
@@ -214,8 +217,10 @@ try {
   // Keep the finalized financial preflight immediately before submission;
   // the first Cargo build can take substantially longer than subsequent runs.
   const before = await checkBamBoost({
+    ...rpcOptions(process.argv.slice(2)),
     identity: options.identity,
     claimEpoch: options.claimEpoch,
+    rpcUrl: resolvedRpc,
   });
   const allocation = before.allocations.find(
     (item) => item.claimEpoch === options.claimEpoch,
@@ -242,7 +247,7 @@ try {
   const command = [
     binary,
     "--rpc-url",
-    configuredRpc(),
+    (await configuredRpc()),
     "--commitment",
     "finalized",
     "--signer",
@@ -263,8 +268,10 @@ try {
   });
 
   const after = await checkBamBoost({
+    ...rpcOptions(process.argv.slice(2)),
     identity: options.identity,
     claimEpoch: options.claimEpoch,
+    rpcUrl: resolvedRpc,
   });
   const verified = after.allocations.find(
     (item) => item.claimEpoch === options.claimEpoch,
@@ -310,6 +317,6 @@ try {
     ),
   );
 } catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(redactRpc(error instanceof Error ? error.message : String(error), resolvedRpc));
   process.exit(1);
 }

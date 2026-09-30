@@ -1,6 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { configPath, operatorPath, validateConfig, type Config } from '../../shared/operator-config';
+import { configPath, operatorPath, validateConfig, selectRpc, type Config } from '../../shared/operator-config';
 
 type FileStatus = { path: string; exists: boolean | null; status: string; detail?: string };
 async function inspect(path: string): Promise<FileStatus> {
@@ -44,8 +44,10 @@ export async function configurationStatus(config?: string, fleet?: string, hosts
         hostFile.detail += ' Missing created/last_updated date fields.';
     } catch { hostFile.status = 'unreadable'; }
   }
-  return { configPath: profiles.path, ...validated,
-    rpcConfigured: Object.fromEntries(Object.entries(validated.profiles).map(([name, profile]) => [name, Boolean(process.env[profile.rpcEnv]?.trim())])),
+  return { configPath: profiles.path, version: validated.version, defaultProfile: validated.defaultProfile,
+    profiles: Object.fromEntries(Object.entries(validated.profiles).map(([name, p]) => [name, {cluster:p.cluster, identity:p.identity, voteAccount:p.voteAccount, verification:p.verification}])),
+    rpcConfigured: Object.fromEntries(Object.entries(validated.profiles).map(([name, profile]) => [name, (() => { try { selectRpc({profile:name}, validated); return true; } catch { return false; } })()])),
+    rpcSource: Object.fromEntries(Object.keys(validated.profiles).map(name => { try { return [name, selectRpc({profile:name}, validated).rpcSource]; } catch { return [name, 'unavailable']; } })),
     files: {profiles, fleet: fleetFile, hosts: hostFile},
     verification: 'Local configuration checks only; no network or host verification. Missing files block only workflows that need them.' };
 }

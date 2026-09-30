@@ -1,6 +1,6 @@
 ---
 created: 2026-03-11
-last_updated: 2026-09-26
+last_updated: 2026-09-30
 ---
 
 # Solana Validator Skills
@@ -45,7 +45,7 @@ The published directories follow the [Agent Skills specification](https://agents
 
 Defaults are `~/.config/validator-ops/config.json` for profiles, `fleet.json` for SFDP pairs and `hosts.md` for host inventory. Explicit CLI/environment overrides take precedence. Configuration is independent of the session directory and installation method.
 
-Set your Helius mainnet URL in the local execution environment as `SOLANA_RPC_URL` or the selected profile's RPC environment variable. Never paste credentials into chat or commit them. Testnet and process-local RPC checks retain explicit network/instance context. Chain queries do not require SSH or signers.
+Onboarding persists your verified Helius mainnet URL in private user configuration. Mainnet helpers resolve `--rpc` → nonblank `SOLANA_RPC_URL` → the selected/default/sole profile's saved URL. Legacy custom RPC environment references remain supported until explicit onboarding migration. Never paste credentials into chat or commit them. Testnet and process-local RPC checks retain explicit network/instance context. Chain queries do not require SSH or signers.
 
 Read-only checks do not authorize transactions or restarts. Mutation workflows require a concrete plan, scoped authorization and fresh state checks. Upgrade skills are supervised runbooks: verify actual installed CLI behavior, supervisor, identities and tower compatibility. Preserve single-instance voting and fresh towers on handoff. Installation tests never require a production transaction or restart.
 

@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import { heliusUrl, rpcCall } from "../../shared/operator-config";
+import { resolveRpc, rpcOptions, configPath, rpcCall } from "../../shared/operator-config";
 import { assertFundingFloor } from "./plan";
 
 const LAMPORTS_PER_SOL = 1_000_000_000n;
@@ -143,7 +143,7 @@ function usage(code = 2): never {
   console.error(
     [
       "Read-only preflight:",
-      "  bun execute.ts --vote-account <PUBKEY> --identity <PUBKEY> --identity-keypair <PATH> --withdrawer-keypair <PATH> --fee-payer-keypair <PATH>",
+      "  bun execute.ts --vote-account <PUBKEY> --identity <PUBKEY> --identity-keypair <PATH> --withdrawer-keypair <PATH> --fee-payer-keypair <PATH> [--rpc URL] [--config PATH] [--profile NAME]",
       "",
       "Execute only after explicit operator approval:",
       "  bun execute.ts ... --execute --operator-approved --approval-id <ID> --approved-ceiling-lamports <LAMPORTS>",
@@ -167,7 +167,7 @@ function requiredArg(name: string): string {
 function parseArgs(): CliArgs {
   const raw = process.argv.slice(2);
   if (raw.includes("--help")) usage(0);
-  const values = new Set(["--vote-account", "--identity", "--identity-keypair", "--withdrawer-keypair", "--fee-payer-keypair", "--approval-id", "--approved-ceiling-lamports"]);
+  const values = new Set(["--vote-account", "--identity", "--identity-keypair", "--withdrawer-keypair", "--fee-payer-keypair", "--approval-id", "--approved-ceiling-lamports", "--rpc", "--config", "--profile"]);
   const flags = new Set(["--execute", "--operator-approved"]);
   const seen = new Set<string>();
   for (let i = 0; i < raw.length; i++) {
@@ -195,11 +195,12 @@ function parseArgs(): CliArgs {
   };
 }
 
-function requireRpcUrl(): string {
-  return heliusUrl(process.env.SOLANA_RPC_URL);
+let resolvedRpc: string | undefined;
+async function requireRpcUrl(): Promise<string> {
+  return resolvedRpc ??= (await resolveRpc(rpcOptions(process.argv.slice(2)))).rpcUrl;
 }
 
-export function redactSecrets(value: string, rpcUrl = process.env.SOLANA_RPC_URL): string {
+export function redactSecrets(value: string, rpcUrl = resolvedRpc ?? process.env.SOLANA_RPC_URL): string {
   if (rpcUrl) {
     value = value.replaceAll(rpcUrl, "[HELIUS_RPC_REDACTED]");
     try {
@@ -217,7 +218,7 @@ export function redactSecrets(value: string, rpcUrl = process.env.SOLANA_RPC_URL
 async function runCommand(command: string[], label: string): Promise<{ stdout: string; stderr: string }> {
   const processHandle = Bun.spawn(command, {
     cwd: repoRoot,
-    env: process.env,
+    env: {...process.env, ...(resolvedRpc ? {SOLANA_RPC_URL:resolvedRpc, VALIDATOR_OPS_CONFIG:configPath(rpcOptions(process.argv.slice(2)).config)} : {})},
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -234,7 +235,7 @@ async function runCommand(command: string[], label: string): Promise<{ stdout: s
 }
 
 async function rpc<T>(method: string, params: unknown[]): Promise<T> {
-  return rpcCall(requireRpcUrl(), method, params);
+  return rpcCall(await requireRpcUrl(), method, params);
 }
 
 async function requireReadableFile(path: string): Promise<void> {
@@ -264,7 +265,7 @@ async function getBond(voteAccount: string): Promise<BondJson> {
     [
       "validator-bonds",
       "-u",
-      requireRpcUrl(),
+      await requireRpcUrl(),
       "show-bond",
       voteAccount,
       "--format",
@@ -340,7 +341,7 @@ function makeApprovalInput(
 }
 
 async function runPreflight(args: CliArgs, ceilingOverride?: bigint): Promise<Preflight> {
-  requireRpcUrl();
+  await requireRpcUrl();
   const [plan, bond, identitySigner, withdrawerSigner, feePayerSigner, tooling] = await Promise.all([
     getPlan(args),
     getBond(args.voteAccount),
@@ -559,7 +560,7 @@ async function runFundingCommand(args: CliArgs, amountSol: string, simulate: boo
     [
       "validator-bonds",
       "-u",
-      requireRpcUrl(),
+      await requireRpcUrl(),
       "-k",
       args.feePayerKeypair,
       ...(simulate ? ["--simulate"] : []),
@@ -621,7 +622,7 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
         "solana",
         "withdraw-from-vote-account",
         "-u",
-        requireRpcUrl(),
+        await requireRpcUrl(),
         "--commitment",
         "finalized",
         "--fee-payer",
