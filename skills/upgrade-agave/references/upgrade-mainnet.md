@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires SSH and release-matched validator/build tooling. Mainnet checks use Helius RPC; optional onboarding uses Bun 1.3.3.
 metadata:
   created: "2026-05-27"
-  last_updated: "2026-09-25"
+  last_updated: "2026-09-30"
 ---
 
 # Upgrade mainnet Firedancer with an Agave backup
@@ -52,5 +52,3 @@ Verify single-instance voting, vote-account identity, advancing finalized votes/
 If the backup was borrowed, restore and verify its original unstaked role and catchup before reporting backup coverage restored.
 
 Report UTC/local times and durable before/after state in the operator's local record. An ambiguous promotion or failed failback requires identity and tower diagnosis, not a blind retry. Never promote either side without the fresh tower from the just-demoted voter, and never run concurrent failovers through the same backup.
-
-Read `VALIDATOR_OPS_HOST_INVENTORY` or `~/.config/validator-ops/hosts.md` first (respect an explicit operator path). This inventory includes backup instances; SFDP `fleet.json` cannot replace it. Missing or stale fields block only dependent actions; verify live roles before mutations.

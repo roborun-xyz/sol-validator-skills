@@ -1,6 +1,6 @@
 ---
 created: 2026-09-25
-last_updated: 2026-09-25
+last_updated: 2026-09-30
 ---
 
 # Public skill source
@@ -14,3 +14,5 @@ Run `bun run validate` for offline regression tests, TypeScript, generated-file 
 Use synthetic fixtures, never production mutations, as tests. Do not read signer contents or commit RPC credentials. Respect operator-selected configuration paths and user-level defaults independently of the session directory. Keep approval requirements tied to actual mutations and preserve established live-role/tower checks.
 
 Maintain Markdown `created` and `last_updated` dates, including string-valued skill metadata dates. Use Conventional Commits and split unrelated scopes. Keep `release-files.json` explicit: review new source files and generated outputs before adding them. Publishing commits, tags or release artifacts is a separate action from local preparation.
+
+Apply DRY to authored sources: keep common operational policy and identical runtime behavior in `src/skills/shared`, and reuse helpers or linked references. Keep workflow-specific approval, network, missing-data and tower semantics explicit. Generated copies in `skills/` are intentional for independent installation; consolidate their sources and regenerate them.

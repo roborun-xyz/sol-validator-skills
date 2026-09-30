@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires SSH and release-matched validator/build tooling. Mainnet checks use Helius RPC; optional onboarding uses Bun 1.3.3.
 metadata:
   created: "2026-05-27"
-  last_updated: "2026-09-25"
+  last_updated: "2026-09-30"
 ---
 
 # Upgrade testnet Firedancer
@@ -23,5 +23,3 @@ Apply `references/shared-upgrade-runbook.md`. Resolve the testnet instance using
 7. Verify supervisor persistence, running executable/version, testnet identity, catchup, vote progress and delinquency, plus health of co-located instances. If an identity promotion is needed, use the deployment's verified tower/identity procedure; do not improvise it from a different host's layout.
 
 For failure or rollback, follow the shared runbook. Never automatically delete a ledger, replace a snapshot, restore a stale tower, or interrupt another instance. Report measured readiness and any missed leader window rather than declaring success after a fixed wait.
-
-Read `VALIDATOR_OPS_HOST_INVENTORY` or `~/.config/validator-ops/hosts.md` first (respect an explicit operator path). This inventory includes backup instances; SFDP `fleet.json` cannot replace it. Missing or stale fields block only dependent actions; verify live roles before mutations.

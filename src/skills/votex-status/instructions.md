@@ -12,7 +12,7 @@ metadata:
 
 Read [installed bundle and configuration](../shared/runtime.md) before running commands. Resolve paths from this loaded SKILL.md, not the session working directory.
 
-Resolve Helius RPC as `--rpc URL` → nonblank `SOLANA_RPC_URL` → the selected/default/sole profile’s saved URL. Use `--config PATH` and `--profile NAME` to select operator configuration; configure missing URLs through [onboarding](../onboarding/instructions.md). No RPC credential is bundled. Run `bun install --frozen-lockfile` from the resolved bundle root before first use.
+Apply [RPC setup and selection](../shared/runtime.md#discover-operator-configuration); repair missing URLs through [onboarding](../onboarding/instructions.md), then resume the requested task. No RPC credential is bundled.
 
 Run from the resolved bundle root:
 

@@ -7,7 +7,7 @@ last_updated: 2026-09-30
 
 Default location: `~/.config/validator-ops/config.json`. Override with `VALIDATOR_OPS_CONFIG` or `--config PATH` (highest priority). Configuration version 2 supports mainnet chain-only checks. It is independent of the existing Markdown host inventory.
 
-RPC URLs are saved per profile after verification. Resolution is `--rpc` → `SOLANA_RPC_URL` → the selected profile's `rpcUrl`; unset, empty or whitespace-only environment values fall back, but invalid nonempty overrides fail. Only Helius mainnet HTTPS endpoints are accepted, and validator resolution also checks genesis. The URL may contain an API key: keep this operator file outside the source repository and installed skill, never print it, and retain atomic writes with mode 0600. Do not run simultaneous profile updates against the same file.
+RPC URLs are saved per profile after verification. Apply [RPC selection](shared-runtime.md#discover-operator-configuration); invalid nonempty overrides fail rather than silently selecting another endpoint. Only Helius mainnet HTTPS endpoints are accepted, and validator resolution also checks genesis. The URL may contain an API key: keep this operator file outside the source repository and installed skill, never print it, and retain atomic writes with mode 0600. Do not run simultaneous profile updates against the same file.
 
 ```bash
 # Inspect local setup without network access; prints public profile fields only.
@@ -47,7 +47,11 @@ The placeholder public keys must be replaced through onboarding; do not copy thi
 
 The example timestamp is 2026-09-15 00:00 UTC / 08:00 Asia/Shanghai. Actual timestamps are produced by the verifier. Onboarding output includes UTC and the local runtime timezone (override with `LOCAL_TIME_ZONE`). A stored timestamp records the last add/refresh; scripts recheck the relationship rather than treating this as permanent verification.
 
+## Chain query first use
+
 Selection: explicit public key overrides saved target; `--profile` overrides default; a sole profile is auto-selected. An explicit profile with an explicit public key supplies RPC settings only, so querying another validator never rewrites the profile. Explicit account commands can reuse the default or sole profile RPC without changing their target; several profiles without a default require selection only when a saved URL is needed. Without a saved profile, use `SOLANA_RPC_URL` or `--rpc`. A malformed or explicitly missing config fails clearly instead of falling back to another operator's setup.
+
+For missing profiles or credentials, follow [onboarding](../SKILL.md), ask only for missing fields, then resume the requested check. SSH and signing keys are unnecessary for chain queries. Ordinary query overrides never persist. Never print API keys.
 
 Errors are actionable: `ONBOARDING_REQUIRED` means missing target or RPC settings; `PROFILE_REQUIRED` means choose a profile; `PROFILE_CONFLICT` means a saved identity no longer matches the live vote account. Refresh only after resolving the change. No saved profile authorizes a transaction, SSH command or failover.
 

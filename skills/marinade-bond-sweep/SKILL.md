@@ -27,7 +27,7 @@ Ensure the Bun global binary directory is on PATH. Preflight checks required `fu
 
 ## Fixed policy
 
-- Use the repository-approved Helius mainnet RPC through `--rpc URL`, nonblank `SOLANA_RPC_URL`, or the selected/default/sole profile’s saved URL, in that order. Both planner and executor accept `--config PATH` and `--profile NAME`. Onboarding stores URLs only in private operator configuration; never print or commit its API key.
+- Apply [RPC setup and selection](references/shared-runtime.md#discover-operator-configuration). Both planner and executor accept `--rpc`, `--config`, and `--profile`; never print or commit API keys.
 - Operate only on an existing bond. Never initialize, configure, withdraw from, or otherwise change a bond.
 - Vote account: when its finalized total balance is below `1 SOL`, skip it. Otherwise withdraw `ALL` to the validator identity; Solana CLI's vote-account `ALL` semantics leave the rent-exempt minimum.
 - Identity account: evaluate its finalized balance independently before moving vote funds. The hard floor is `5 SOL`; use a `5.001 SOL` execution reserve because an active validator identity can continue paying vote fees while the transaction is simulated and finalized. Below `5 SOL`, contribute none of its original balance. At or below `5.001 SOL`, contribute none. Above `5.001 SOL`, contribute exactly `balance - 5.001 SOL`.

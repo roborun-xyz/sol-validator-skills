@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires SSH and release-matched validator/build tooling. Mainnet checks use Helius RPC; optional onboarding uses Bun 1.3.3.
 metadata:
   created: "2026-09-20"
-  last_updated: "2026-09-25"
+  last_updated: "2026-09-30"
 ---
 
 # Upgrade an Agave primary through a backup
@@ -16,7 +16,7 @@ Apply [upgrade preparation](shared-upgrade-runbook.md) and [mainnet identity han
 
 ## Prepare before failover
 
-Read `VALIDATOR_OPS_HOST_INVENTORY` or `~/.config/validator-ops/hosts.md`, respecting an explicit operator path. Verify missing or stale facts through [inventory](inventory.md). There are no default hosts, identities, key paths or supervisors.
+Verify missing or stale facts through [inventory](inventory.md). There are no default hosts, identities, key paths or supervisors.
 
 1. Verify live roles, local and restart identities, vote account, voter availability, installed binaries, supervisors, ledger/tower compatibility and co-located workloads. Confirm the backup is unstaked and not serving another validator's votes. Upgrade it first with `upgrade-agave` if its release is unsuitable.
 2. Resolve the requested upstream, target release/ref and commit. Prepare an isolated build and stage the verified binary/configuration before failover when this cannot affect the running executable or its restart path. Preserve rollback artifacts and apply the shared installation, capabilities and integration checks.

@@ -1,11 +1,11 @@
 ---
 created: 2026-09-15
-last_updated: 2026-09-20
+last_updated: 2026-09-30
 ---
 
 # Preparing an instance-specific upgrade
 
-Read `../inventory/references/hosts.md` and the operator's selected inventory. Never select the bundled private inventory automatically. These skills support Agave/Jito-Agave and Firedancer/Frankendancer instances only when the installed CLI, supervisor, identity-switching and tower behavior have been verified. A full Firedancer release may differ from a Frankendancer deployment: do not assume Agave admin commands work for both.
+Read [host inventory](../inventory/references/hosts.md) and the operator's selected inventory at `VALIDATOR_OPS_HOST_INVENTORY` or `~/.config/validator-ops/hosts.md`, respecting an explicit operator path. This inventory includes backup instances; SFDP `fleet.json` cannot replace it. Missing or stale fields block only dependent actions; verify live roles before mutations. Never select the bundled private inventory automatically. These skills support Agave/Jito-Agave and Firedancer/Frankendancer instances only when the installed CLI, supervisor, identity-switching and tower behavior have been verified. A full Firedancer release may differ from a Frankendancer deployment: do not assume Agave admin commands work for both.
 
 Complete read-only discovery and prepare a concrete runbook before asking for any missing execution authorization. Record the target release/tag or custom remote/ref and resolved commit, source provenance, build/install/start paths, matching admin CLI, exact supervisor, affected instance and rollback. Check upstream release notes and the target CLI help; never derive an Agave revision solely from a Firedancer version number. Verify network/SFDP compatibility where relevant. Retain explicit user authorization within its scope; do not ask again for every routine step already authorized.
 

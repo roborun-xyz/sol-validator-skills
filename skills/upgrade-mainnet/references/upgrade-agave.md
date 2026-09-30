@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires SSH and release-matched validator/build tooling. Mainnet checks use Helius RPC; optional onboarding uses Bun 1.3.3.
 metadata:
   created: "2026-05-27"
-  last_updated: "2026-09-25"
+  last_updated: "2026-09-30"
 ---
 
 # Upgrade an Agave backup
@@ -24,5 +24,3 @@ For a voting Agave/Jito-Agave primary upgrade through a backup, use [upgrade-aga
 6. Wait for measured catchup and healthy local RPC. Verify network, version, unstaked identity, expected vote-account configuration, and unrelated instances. Re-check current required versions and report whether the backup is ready for its declared failover role.
 
 Do not promote the backup, change keys or voting authorization, delete ledgers, download snapshots, or stop co-located testnet services as an incidental upgrade step. Diagnose those separately when needed. If an authorized operation also changes the backup's assigned role, apply [role switching](shared-backup-role-switch.md) and report restoration of the original coverage. An unstaked node can still be important failover infrastructure; do not describe its restart as risk-free.
-
-Read `VALIDATOR_OPS_HOST_INVENTORY` or `~/.config/validator-ops/hosts.md` first (respect an explicit operator path). This inventory includes backup instances; SFDP `fleet.json` cannot replace it. Missing or stale fields block only dependent actions; verify live roles before mutations.

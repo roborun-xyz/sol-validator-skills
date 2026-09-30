@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Bash and SSH. Targets need Linux, systemd, iproute2, GNU timeout and DoubleZero.
 metadata:
   created: "2026-06-12"
-  last_updated: "2026-09-25"
+  last_updated: "2026-09-30"
 ---
 
 # DoubleZero Status
@@ -64,22 +64,6 @@ It uses `ssh`, `systemctl show`, `ip -br addr`, `ip route`, `doublezero status`,
 - `doublezero routes` can contain many rows. Count states or sample the first rows; avoid dumping all routes.
 - Kernel interface state `UNKNOWN` is normal for these tunnel-style interfaces when BGP sessions and routes are present.
 
-## Fallback Commands
+## Helper recovery and manual diagnostics
 
-If the helper is unavailable, run this pattern per host:
-
-```bash
-ssh <host> 'echo HOST=$(hostname);
-echo UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ);
-echo LOCAL=$(TZ=Asia/Shanghai date +%Y-%m-%dT%H:%M:%S%z);
-systemctl is-active doublezerod;
-systemctl show doublezerod -p ActiveState -p SubState -p MainPID -p NRestarts -p ExecMainStartTimestamp --no-pager;
-doublezero -e mainnet-beta status 2>&1;
-doublezero -e mainnet-beta status 2>&1 | grep -F "P:edge-solana-shreds" || true;
-ip -br addr show doublezero0 2>/dev/null || true;
-ip -br addr show doublezero1 2>/dev/null || true;
-printf "doublezero0_routes="; ip route | grep -c " dev doublezero0 " || true;
-printf "doublezero1_routes="; ip route | grep -c " dev doublezero1 " || true;
-doublezero -e mainnet-beta latency 2>&1 | head -25;
-journalctl -u doublezerod -p warning..alert -n 20 --no-pager --utc'
-```
+If the helper is missing, restore the installed bundle using the runtime reference. For individual diagnostic commands, use `src/skills/doublezero-status/scripts/check-doublezero-status.sh` as the command reference. Preserve its alias validation, batch-mode SSH, bounded connection/CLI waits, and UTC/local timestamp output when running commands individually.
