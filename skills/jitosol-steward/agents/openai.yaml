@@ -1,0 +1,4 @@
+interface:
+  display_name: "JitoSOL Steward"
+  short_description: "Check JitoSOL rank, delegation and stake"
+  default_prompt: "Check the validator's current JitoSOL Steward ranking and delegation."

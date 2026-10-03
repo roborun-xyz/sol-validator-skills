@@ -1,6 +1,6 @@
 ---
 created: 2026-03-11
-last_updated: 2026-09-30
+last_updated: 2026-10-03
 ---
 
 # Solana Validator Skills
@@ -30,6 +30,7 @@ The published directories follow the [Agent Skills specification](https://agents
 | inventory | Host roles, paths, signer roles and failover relationships |
 | validator-performance | Epoch performance and current validator status |
 | validator-revenue | Historical rewards, fees and bond costs |
+| jitosol-steward | Current Steward rank, delegation fractions and stake |
 | jito-bam-boost | Allocation/claim checks and explicitly approved claims |
 | marinade-bond-sweep | Preflight and approved funding of an existing bond |
 | sfdp-check | Participation, required versions and optional host checks |
