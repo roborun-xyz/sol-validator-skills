@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC.
 metadata:
   created: "2026-05-27"
-  last_updated: "2026-10-03"
+  last_updated: "2026-10-05"
 ---
 
 # Validator Revenue
@@ -28,7 +28,7 @@ The helper uses the operator-selected Helius mainnet RPC, JPool/SVT history, Tri
 
 Trillium serves only recent epochs. For an epoch it does not cover, the helper uses the identity recorded in that epoch's JPool/SVT history row and reports the choice as `bamBoostIdentitySource` (`trillium` or `svt-history`). `identity_missing` means neither source supplied an identity, so that epoch's BAM Boost allocation is unknown, not zero; say so when it appears inside the reported window.
 
-When JPool/SVT history starts after the requested first epoch, the helper shortens every source to the available epochs and states which requested epochs are unavailable (`requestedFirstEpoch` and `firstEpoch` in JSON; standard error for CSV). Repeat that scope whenever quoting totals. A gap after the first available epoch still fails. `skip_rate_pct` is derived from leader-slot counts and is empty for an epoch without leader slots.
+When JPool/SVT history starts after the requested first epoch, the helper shortens every source to the available epochs and states which requested epochs are unavailable (`requestedFirstEpoch` and `firstEpoch` in JSON; standard error for CSV). Repeat that scope whenever quoting totals. A gap after the first available epoch still fails. `skip_rate_pct` is derived from leader-slot counts and is empty for an epoch without leader slots or without both counts.
 
 For a Marinade bidding bond, when an epoch has no published `ValidatorBond`-funded `Bidding` events globally, estimate its pending bidding cost using that epoch's `https://scoring.marinade.finance/api/v1/scores/sam?epoch=N` row: `effectiveBid × values.marinadeActivatedStakeSol / 1000`. The API's effective bid is in SOL per 1,000 SOL per epoch and includes static/dynamic bid components; do not substitute configured CPMPE, target stake, total validator stake or another epoch's data, or add dynamic commissions a second time. Missing, duplicate, mismatched-epoch or invalid bid/stake data fails the estimate rather than becoming zero.
 

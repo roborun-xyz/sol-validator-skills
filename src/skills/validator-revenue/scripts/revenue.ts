@@ -2,7 +2,7 @@
 
 import { localIso } from "../../shared/time";
 
-import { fetchSvtHistory, unavailableEpochsNote } from "../../shared/epoch-history";
+import { fetchSvtHistory, unavailableEpochsNote, leaderSkipRatePct } from "../../shared/epoch-history";
 import { lamportsToSol, LAMPORTS_PER_SOL } from "../../shared/amounts";
 
 import { fetchJson, fetchOptionalJson } from "../../shared/http";
@@ -855,11 +855,8 @@ async function collectRows(
       preCompLamportsPerKiloStake: Math.round(preCompLamportsPerKiloStake),
       blocksProduced,
       leaderSlots,
-      // SVT's skippedSlots is the vote-credit shortfall, not block production.
-      skipRate:
-        leaderSlots > 0 && blocksProduced <= leaderSlots
-          ? (((leaderSlots - blocksProduced) / leaderSlots) * 100).toFixed(4)
-          : "",
+      // Empty unless both leader-slot counts are present; a missing count is not 100% skipped.
+      skipRate: leaderSkipRatePct(row.leaderSlotsTotal, row.leaderSlotsDone)?.toFixed(4) ?? "",
     };
   });
 

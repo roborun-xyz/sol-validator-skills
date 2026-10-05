@@ -5,7 +5,7 @@ import {formatSol, lamportsToSol} from './amounts';
 import {decodeVaultEpochInfo, assertUsdcVoteBuys, USDC_MINT} from './votex-accounts';
 import {parseEpochQueryArgs, optionValue} from './cli';
 import {deriveBamBoostAddresses, deriveBamBoostClaimStatusAddress, verifyBamBoostClaimStatusAccount, BAM_BOOST_PROGRAM} from './bam-accounts';
-import {fetchSvtHistory, unavailableEpochsNote} from './epoch-history';
+import {fetchSvtHistory, unavailableEpochsNote, leaderSkipRatePct} from './epoch-history';
 import {pollReadOnly} from './poll';
 import {TransportError} from './http';
 
@@ -76,6 +76,11 @@ test('shared SVT history filters and orders rows while rejecting incomplete wind
   expect(unavailableEpochsNote(99,100,101)).toEqual(['Requested epochs `99-101`; JPool/SVT history starts at epoch `100`, so epochs `99-99` are unavailable and excluded.']);
   expect(unavailableEpochsNote(99,99,101)).toEqual([]);
  } finally {globalThis.fetch=original;}
+});
+
+test('skip rate needs both leader-slot counts and never treats a missing count as zero blocks',()=>{
+ expect(leaderSkipRatePct(10,9)).toBe(10);expect(leaderSkipRatePct('10','0')).toBe(100);
+ for(const [total,done] of [[10,undefined],[10,null],[10,-1],[10,11],[0,0],[undefined,5],[10,'']]) expect(leaderSkipRatePct(total,done)).toBeNull();
 });
 
 test('read-only polling stops on the first defined value and stays bounded',async()=>{

@@ -22,6 +22,24 @@ export async function fetchSvtHistory<Row extends {epoch: number}>(
   return rows;
 }
 
+/** A non-negative safe integer from an upstream count; null when absent or invalid. */
+export function toCount(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN;
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+/**
+ * Block skip rate from leader-slot counts only; null without leader slots or without both
+ * valid counts. SVT's `skippedSlots` is the vote-credit shortfall (1 - tvCredits / max),
+ * not block production, so it is never a fallback.
+ */
+export function leaderSkipRatePct(leaderSlotsTotal: unknown, leaderSlotsDone: unknown): number | null {
+  const leaderSlots = toCount(leaderSlotsTotal);
+  const blocksDone = toCount(leaderSlotsDone);
+  if (leaderSlots === null || blocksDone === null || leaderSlots === 0 || blocksDone > leaderSlots) return null;
+  return ((leaderSlots - blocksDone) / leaderSlots) * 100;
+}
+
 /** One disclosure for a window shortened by late-starting history; empty when complete. */
 export function unavailableEpochsNote(requestedFirstEpoch: number, firstEpoch: number, lastEpoch: number): string[] {
   if (requestedFirstEpoch >= firstEpoch) return [];
