@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC.
 metadata:
   created: "2026-06-01"
-  last_updated: "2026-09-30"
+  last_updated: "2026-10-03"
 ---
 
 # Votex ROI Simulation
@@ -36,6 +36,8 @@ bun src/skills/votex-roi-sim/scripts/simulate.ts \
 `--gauge` is required; there is no default validator gauge.
 
 Useful overrides: `--current-bid`, `--other-bids`, `--total-vev`, `--total-gauge-vev`, `--lamports-per-staked-sol`, `--sol-usd`, and `--format json`.
+
+`--lamports-per-staked-sol` defaults to `105000`, a fixed assumption for revenue per directed staked SOL over the modeled period, not a measured value. Revenue and ROI scale linearly with it, so supply the validator's own measured figure when one is available and always report which value was used.
 
 The helper reads VotaFi stats, SolanaVault stakebot data, Jupiter SOL/USD, and Helius RPC. If active-epoch stats are unpublished, use only a user-approved comparable epoch or explicit overrides.
 

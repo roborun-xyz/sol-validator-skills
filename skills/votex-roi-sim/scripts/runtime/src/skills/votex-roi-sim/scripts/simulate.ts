@@ -9,7 +9,7 @@ import { simulateBids } from "./model";
 import { createRpcContext, fetchRpcResponse } from "../../shared/operator-config.ts";
 import {
   GAUGE_PROGRAM as GAUGE_PROGRAM_ADDRESS, VAULT_GAUGEMEISTER as VAULT_GAUGEMEISTER_ADDRESS,
-  decodeVaultEpochInfo, votexStatsUrl,
+  decodeVaultEpochInfo, votexStatsUrl, assertUsdcVoteBuys,
 } from "../../shared/votex-accounts";
 
 import { Connection, PublicKey } from "@solana/web3.js";
@@ -114,7 +114,8 @@ async function fetchStats(epoch: number) {
   const source = votexStatsUrl(epoch);
   const response = await fetchResponse(source);
   if (!response.ok) throw new Error(`Failed to fetch Votex stats for epoch ${epoch}: HTTP ${response.status}`);
-  const stats = await response.json() as { totalVev: string; voteBuys: Array<{ gauge: string; amount: string }> };
+  const stats = await response.json() as { totalVev: string; voteBuys: Array<{ gauge: string; amount: string; mint?: string }> };
+  assertUsdcVoteBuys(stats.voteBuys, epoch);
   const totalVev = Number(BigInt(stats.totalVev)) / 1e6;
   const totalUsdc = stats.voteBuys.reduce((sum, buy) => sum + Number(BigInt(buy.amount)) / 1e6, 0);
   return { source, totalVev, totalUsdc, voteBuys: stats.voteBuys };
