@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createRpcContext, redactRpc } from "../../shared/operator-config";
+import { pollReadOnly } from "../../shared/poll";
 import {
   assertFundingFloor,
   IDENTITY_HARD_FLOOR as IDENTITY_HARD_FLOOR_LAMPORTS,
@@ -432,12 +433,16 @@ export function parseWithdrawalSignature(output: string): string | undefined {
 }
 
 async function confirmFinalized(signature: string): Promise<void> {
-  const statuses = await rpc<{ value: Array<{ err: unknown; confirmationStatus?: string } | null> }>(
-    "getSignatureStatuses",
-    [[signature], { searchTransactionHistory: true }],
-  );
-  const status = statuses.value[0];
-  if (!status || status.err !== null || status.confirmationStatus !== "finalized") {
+  const status = await pollReadOnly(async () => {
+    const statuses = await rpc<{ value: Array<{ err: unknown; confirmationStatus?: string } | null> }>(
+      "getSignatureStatuses",
+      [[signature], { searchTransactionHistory: true }],
+    );
+    const row = statuses.value[0];
+    // An on-chain error is final; absence or a lower commitment may only mean this node is behind.
+    return row && (row.err !== null || row.confirmationStatus === "finalized") ? row : undefined;
+  });
+  if (!status || status.err !== null) {
     throw new Error(`transaction is not finalized and successful: ${signature}`);
   }
 }
@@ -488,7 +493,7 @@ async function findFundingTransaction(
   beforeSignatures: Set<string>,
   expected: { vote: string; identity: string; bond: string; amountLamports: bigint },
 ): Promise<{ signature: string; match: FundingTransactionMatch }> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  const found = await pollReadOnly(async () => {
     const rows = await getRecentSignatures(bond);
     const candidates = rows.filter((row) => row.err === null && !beforeSignatures.has(row.signature));
     const transactions = await Promise.all(candidates.map(async (row) => [row, await getTransaction(row.signature)] as const));
@@ -497,9 +502,10 @@ async function findFundingTransaction(
       const match = matchFundingTransaction(transaction, expected);
       if (match) return { signature: row.signature, match };
     }
-    await Bun.sleep(750);
-  }
-  throw new Error("funding command succeeded but its finalized transaction signature could not be resolved");
+    return undefined;
+  });
+  if (!found) throw new Error("funding command succeeded but its finalized transaction signature could not be resolved");
+  return found;
 }
 
 function assertSameBond(before: BondJson, after: BondJson, args: CliArgs): void {
@@ -580,7 +586,11 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
     await confirmFinalized(voteWithdrawalSignature);
     stage("vote-withdrawal-finalized", { signature: voteWithdrawalSignature });
 
-    [currentPlan, currentBond] = await Promise.all([getPlan(args), getBond(args.voteAccount)]);
+    // Wait within a fixed bound for the finalized withdrawal to be visible to these reads.
+    await pollReadOnly(async () => {
+      [currentPlan, currentBond] = await Promise.all([getPlan(args), getBond(args.voteAccount)]);
+      return currentPlan.voteBalanceLamports === currentPlan.voteRentExemptLamports ? true : undefined;
+    });
     assertSameBond(preflight.bond, currentBond, args);
     if (currentPlan.voteBalanceLamports !== currentPlan.voteRentExemptLamports) {
       throw new Error(
@@ -642,7 +652,12 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
   await confirmFinalized(fundingTransaction.signature);
   stage("bond-funding-finalized", { signature: fundingTransaction.signature });
 
-  const [finalPlan, finalBond] = await Promise.all([getPlan(args), getBond(args.voteAccount)]);
+  // Same bound for the finalized funding to appear in the bond's owned amount.
+  let [finalPlan, finalBond] = [currentPlan, currentBond];
+  await pollReadOnly(async () => {
+    [finalPlan, finalBond] = await Promise.all([getPlan(args), getBond(args.voteAccount)]);
+    return parseSolLamports(finalBond.amountOwned) - bondOwnedBeforeFundingLamports >= fundingLamports ? true : undefined;
+  });
   assertSameBond(currentBond, finalBond, args);
   if (initialPlan.voteAction === "withdraw-all" && finalPlan.voteBalanceLamports !== finalPlan.voteRentExemptLamports) {
     throw new Error("final vote balance no longer equals its rent reserve");
@@ -660,7 +675,7 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
     mode: "execute",
     completed: true,
     completedAtUtc: completedAt.toISOString(),
-    completedAtLocal: formatLocalTime(completedAt),
+    completedAtLocal: formatLocalTime(completedAt, initialPlan.localTimeZone),
     approvalId: preflight.approvalId,
     approvedCeilingLamports: preflight.approvedCeilingLamports.toString(),
     before: {

@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Bun 1.3.3, Node.js >=20.18.0, Solana CLI, validator-bonds CLI 2.6.0 and Helius mainnet RPC. Execution requires operator-owned local signers.
 metadata:
   created: "2026-08-24"
-  last_updated: "2026-09-30"
+  last_updated: "2026-10-03"
 ---
 
 # Marinade Bond Sweep
@@ -29,6 +29,7 @@ Ensure the Bun global binary directory is on PATH. Preflight checks required `fu
 
 - Apply [RPC setup and selection](../shared/runtime.md#discover-operator-configuration). Both planner and executor accept `--rpc`, `--config`, and `--profile`; never print or commit API keys.
 - Operate only on an existing bond. Never initialize, configure, withdraw from, or otherwise change a bond.
+- The executor accepts only a bond whose authority is the validator identity and whose withdrawal state is empty; any other bond is rejected in preflight. Do not work around that check for a bond with a separate authority.
 - Vote account: when its finalized total balance is below `1 SOL`, skip it. Otherwise withdraw `ALL` to the validator identity; Solana CLI's vote-account `ALL` semantics leave the rent-exempt minimum.
 - Identity account: evaluate its finalized balance independently before moving vote funds. The hard floor is `5 SOL`; use a `5.001 SOL` execution reserve because an active validator identity can continue paying vote fees while the transaction is simulated and finalized. Below `5 SOL`, contribute none of its original balance. At or below `5.001 SOL`, contribute none. Above `5.001 SOL`, contribute exactly `balance - 5.001 SOL`.
 - Require every nonzero sweep to leave at least `5 SOL` in the identity. If the identity starts below `5 SOL`, reject an otherwise eligible vote sweep during read-only planning, before any withdrawal. A below-floor identity with no eligible surplus can still produce a no-op result. Do not retain part of the vote surplus to top up the identity under this policy.
@@ -68,6 +69,8 @@ This mode cannot mutate chain state. It runs the finalized planner, bond lookup,
 
 Do not repeat the planner or `show-bond` serially when this result succeeds. Use extra read-only commands only to diagnose a failed or ambiguous preflight.
 
+A rejected plan reports the finalized vote, rent-reserve and identity balances it was decided on; relay them with the rejection.
+
 If no mutation is proposed, report the result and stop. Otherwise present the JSON result concisely, including UTC and local check time, all accounts and signer paths, vote and identity actions, proposed funding, approval ceiling, and the warning that vote withdrawal can succeed even if later funding fails. Ask for explicit approval of that exact `approvalId` and ceiling, then stop and wait. Never continue to Phase 2 in the same turn without the operator's confirmation.
 
 ## Phase 2: execute after confirmation
@@ -96,6 +99,8 @@ The executor re-runs one parallelized finalized preflight and refuses to sign un
 5. re-read the identity and require the same amount to leave at least the `5 SOL` hard floor;
 6. submit that exact amount at finalized commitment;
 7. resolve the funding signature from Helius and verify the `FundBond` transaction, funded stake account, final identity floor, vote rent reserve, bond ownership increase, and withdrawal state.
+
+After each submission the executor polls its read-only verification (signature status, vote balance, bond ownership) for a bounded period, so a lagging RPC node is not reported as a failed mutation. It never repeats a submission.
 
 Do not replace this flow with manual commands after a successful Phase 1. Do not use `solana confirm -v`, because it prints the configured RPC URL; use the executor's redacted RPC verification.
 

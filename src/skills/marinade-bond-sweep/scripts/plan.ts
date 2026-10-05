@@ -4,7 +4,7 @@ import { optionValue } from "../../shared/cli";
 
 import { formatSol, LAMPORTS_PER_SOL } from "../../shared/amounts";
 
-import { localIso as formatLocalTime } from "../../shared/time";
+import { localIso as formatLocalTime, localTimeZone as selectedTimeZone } from "../../shared/time";
 
 import { resolveRpc, rpcOptions, rpcCall as rpc } from "../../shared/operator-config";
 
@@ -187,9 +187,17 @@ async function main() {
   const voteBalance = safeLamports(voteInfo.lamports, "vote balance");
   const voteRent = safeLamports(rentLamportsNumber, "vote rent exemption");
   const identityBalance = safeLamports(identityInfo.lamports, "identity balance");
-  const actions = calculateActions(voteBalance, voteRent, identityBalance);
+  let actions: SweepActions;
+  try {
+    actions = calculateActions(voteBalance, voteRent, identityBalance);
+  } catch (error) {
+    // A rejected plan still reports the finalized balances it was decided on.
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)} (finalized vote balance ${formatSol(voteBalance)} SOL, vote rent reserve ${formatSol(voteRent)} SOL, identity balance ${formatSol(identityBalance)} SOL)`,
+    );
+  }
   const now = new Date();
-  const localTimeZone = process.env.LOCAL_TIME_ZONE ?? "Asia/Shanghai";
+  const localTimeZone = selectedTimeZone();
 
   const plan: Plan = {
     checkedAtUtc: now.toISOString(),
