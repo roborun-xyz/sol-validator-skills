@@ -207,6 +207,22 @@ function tokenAmount(account: RpcAccount | null): bigint {
   return data.readBigUInt64LE(64);
 }
 
+/**
+ * Narrow finalized read for post-claim verification: one RPC call for the only two accounts
+ * a claim changes. Undefined until the Claim Status account is visible; a Claim Status or
+ * token account that does not match is a definitive failure and throws.
+ */
+export async function readFinalizedClaim(
+  rpcUrl: string,
+  claim: { identity: string; claimStatus: string; destination: string; amountLamports: bigint },
+): Promise<{ destinationJitoSolBalanceLamports: bigint } | undefined> {
+  const accounts = await getMultipleAccounts([new PublicKey(claim.claimStatus), new PublicKey(claim.destination)], rpcUrl);
+  const claimStatusAccount = accounts.get(claim.claimStatus);
+  if (!claimStatusAccount) return undefined;
+  verifyBamBoostClaimStatusAccount(claimStatusAccount, claim.identity, claim.amountLamports);
+  return { destinationJitoSolBalanceLamports: tokenAmount(accounts.get(claim.destination) ?? null) };
+}
+
 async function latestJitoSolRatio() {
   const now = new Date();
   const start = new Date(now.getTime() - 7 * 86_400_000).toISOString();

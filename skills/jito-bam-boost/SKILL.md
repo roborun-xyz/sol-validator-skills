@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC. Approved claims also require Git, Cargo, Solana CLI and an operator-owned local signer.
 metadata:
   created: "2026-08-29"
-  last_updated: "2026-10-03"
+  last_updated: "2026-10-05"
 ---
 
 # Jito BAM Boost
@@ -84,7 +84,7 @@ For multiple approved epochs, run them in ascending order and stop after the fir
 
 ## Verify and report
 
-The wrapper requires finalized post-verification. It polls the finalized Claim Status read-only for a bounded period after the CLI returns and never resubmits. Report:
+The wrapper requires finalized post-verification. It polls the finalized Claim Status and destination token account read-only for a bounded period after the CLI returns and never resubmits; a Claim Status that does not match the approved claim fails at once. Report:
 
 - UTC and local completion time;
 - transaction signature;

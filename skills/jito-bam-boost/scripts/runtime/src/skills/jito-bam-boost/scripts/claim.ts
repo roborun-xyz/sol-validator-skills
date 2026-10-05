@@ -11,7 +11,7 @@ import { access, mkdir, rename, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { checkBamBoost } from "./check.ts";
+import { checkBamBoost, readFinalizedClaim } from "./check.ts";
 
 const OFFICIAL_REPO = "https://github.com/jito-foundation/jito-bam-boost-cli.git";
 const PINNED_COMMIT = "1fbca8059eb13f6120b12b8b77d51dfb1013a2d6";
@@ -264,21 +264,21 @@ try {
   });
 
   // The CLI can return before every node serves the finalized Claim Status.
-  // Poll read-only within a fixed bound; this never resubmits.
-  const after = await pollReadOnly(async () => {
-    const result = await checkBamBoost(checkOptions);
-    const verified = result.allocations.find(
-      (item) => item.claimEpoch === options.claimEpoch,
-    );
-    return verified?.status === "claimed" ? result : undefined;
-  }, 10, 3_000);
+  // Poll only the two accounts the claim changes, read-only and within a fixed
+  // bound; this never resubmits, and a mismatched account fails at once.
+  const after = await pollReadOnly(() => readFinalizedClaim(rpcUrl, {
+    identity: options.identity,
+    claimStatus: allocation.claimStatus,
+    destination: before.destinationJitoSolAccount,
+    amountLamports: options.expectedAmountLamports,
+  }), 10, 3_000);
   if (!after) {
     throw new Error(
       "Transaction returned success, but finalized Claim Status verification did not show claimed",
     );
   }
   const beforeToken = BigInt(before.destinationJitoSolBalanceLamports);
-  const afterToken = BigInt(after.destinationJitoSolBalanceLamports);
+  const afterToken = after.destinationJitoSolBalanceLamports;
   const delta = afterToken - beforeToken;
   if (delta !== options.expectedAmountLamports) {
     throw new Error(
