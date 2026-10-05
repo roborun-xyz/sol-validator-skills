@@ -3,7 +3,7 @@
 import { createRpcContext } from "../../shared/operator-config.ts";
 import {
   VOTEX_PROGRAM, VAULT_CONFIG, VAULT_GAUGEMEISTER, VAULT_ALLOWED_MINTS, USDC_MINT,
-  decodeVaultEpochInfo, votexStatsUrl, assertUsdcVoteBuys, type VaultEpochInfo as EpochInfo,
+  decodeVaultEpochInfo, votexStatsUrl, assertUsdcVoteBuys, NonUsdcVoteBuyError, type VaultEpochInfo as EpochInfo,
 } from "../../shared/votex-accounts";
 
 import { base58Encode, base58Decode } from "../../shared/base58";
@@ -366,13 +366,14 @@ function parseIncreaseVoteBuyTransactions(tx: any, signature: string): Transacti
     if (ixEpoch !== targetEpoch) continue;
 
     const accounts = (ix.accounts ?? []).map((idx: number) => keys[idx]);
-    if (accounts[3] !== USDC_MINT) continue;
     if (accounts[4] !== VAULT_CONFIG) continue;
     if (accounts[5] !== VAULT_GAUGEMEISTER) continue;
     if (accounts[8] !== VAULT_ALLOWED_MINTS) continue;
     if (accounts[9] !== TOKEN_PROGRAM) continue;
     if (accounts[10] !== ASSOCIATED_TOKEN_PROGRAM) continue;
     if (accounts[11] !== SYSTEM_PROGRAM) continue;
+    // A Vault vote buy in another mint fails here exactly as it does in published stats.
+    if (accounts[3] !== USDC_MINT) throw new NonUsdcVoteBuyError(targetEpoch, accounts[3]);
 
     rows.push({
       signature,

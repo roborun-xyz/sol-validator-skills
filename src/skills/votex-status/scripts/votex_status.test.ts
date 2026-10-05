@@ -67,6 +67,13 @@ test("the page limit is honored in either option form", async () => {
   }
 });
 
+test("an on-chain vote buy in another mint fails like published stats instead of being skipped", async () => {
+  const result = await run("other-mint");
+  expect(result.code).toBe(1);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toContain("non-USDC vote buy (mint So11111111111111111111111111111111111111112)");
+});
+
 test("failed transactions do not contribute bids", async () => {
   const result = await run("failed-tx");
   expect(result.code).toBe(0);

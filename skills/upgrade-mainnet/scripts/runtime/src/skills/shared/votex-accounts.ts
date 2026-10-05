@@ -28,10 +28,20 @@ export function decodeVaultEpochInfo(data: Buffer): VaultEpochInfo {
   };
 }
 
-/** Published vote-buy amounts are summed as USDC; another mint would corrupt those totals. */
+/**
+ * Vote-buy amounts are summed as USDC, so a Vault vote buy in another mint would corrupt the
+ * totals. Published stats and the on-chain scan reject it the same way.
+ */
+export class NonUsdcVoteBuyError extends Error {
+  constructor(epoch: number, mint: unknown) {
+    super(`Votex epoch ${epoch} includes a non-USDC vote buy (mint ${typeof mint === "string" ? mint : "missing or invalid"}); USDC totals do not cover it.`);
+  }
+}
+
+/** Every published vote buy names its mint; an absent or non-string mint is not assumed to be USDC. */
 export function assertUsdcVoteBuys(voteBuys: Array<{ mint?: unknown }>, epoch: number): void {
-  const other = voteBuys.find((buy) => typeof buy.mint === "string" && buy.mint !== USDC_MINT);
-  if (other) throw new Error(`Votex stats for epoch ${epoch} include a non-USDC vote buy (mint ${other.mint}); USDC totals do not cover it.`);
+  const other = voteBuys.find((buy) => buy.mint !== USDC_MINT);
+  if (other) throw new NonUsdcVoteBuyError(epoch, other.mint);
 }
 
 export function votexStatsUrl(epoch: number): string {

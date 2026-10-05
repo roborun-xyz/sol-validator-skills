@@ -9,7 +9,7 @@ import { simulateBids } from "./model";
 import { createRpcContext, fetchRpcResponse } from "../../shared/operator-config.ts";
 import {
   GAUGE_PROGRAM as GAUGE_PROGRAM_ADDRESS, VAULT_GAUGEMEISTER as VAULT_GAUGEMEISTER_ADDRESS,
-  decodeVaultEpochInfo, votexStatsUrl, assertUsdcVoteBuys,
+  decodeVaultEpochInfo, votexStatsUrl, assertUsdcVoteBuys, NonUsdcVoteBuyError,
 } from "../../shared/votex-accounts";
 
 import { Connection, PublicKey } from "@solana/web3.js";
@@ -176,7 +176,8 @@ try {
 } catch (error) {
   // VotaFi stats may be unpublished for the live epoch. If the caller supplied
   // both --total-vev and --other-bids, proceed against the live/partial pool.
-  if (args.totalVev === undefined || args.otherBids === undefined) throw error;
+  // Published stats that cannot be summed as USDC are not "unavailable"; never relabel them.
+  if (error instanceof NonUsdcVoteBuyError || args.totalVev === undefined || args.otherBids === undefined) throw error;
   const source = `${votexStatsUrl(epoch)} (stats unavailable; using explicit --total-vev and --other-bids overrides)`;
   stats = { source, totalVev: args.totalVev, totalUsdc: args.otherBids + (args.currentBid ?? 0), voteBuys: [] };
 }

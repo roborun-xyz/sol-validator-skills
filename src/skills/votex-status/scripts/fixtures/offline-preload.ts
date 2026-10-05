@@ -15,7 +15,8 @@ function transaction(id: number) {
     meta: mode === "invalid-meta" ? {} : { err: mode === "failed-tx" ? { InstructionError: [0, "fixture"] } : null },
     transaction: { message: {
       accountKeys: [
-        "fixture-buyer", "fixture-buyer-token", "fixture-vault", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "fixture-buyer", "fixture-buyer-token", "fixture-vault",
+        mode === "other-mint" && id === 1 ? "So11111111111111111111111111111111111111112" : "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
         "AAJ1TUeLfzyCrywCukTaehieCPe6bQtaNbNXpcMDLPeB", "HniSajyYDYEfdbNfW8L5Eq8W1pxt8XsYDgc6TNsx7t6x",
         "fixture-vote-buy", "fixture-gauge", "5ArmEZ9iso7p91tZafCRsfNwmoWpCG1Sd7UGbqieKBZ9",
         "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",

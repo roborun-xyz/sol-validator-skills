@@ -96,6 +96,8 @@ test('read-only polling stops on the first defined value and stays bounded',asyn
 });
 
 test('published vote buys in another mint are rejected rather than summed as USDC',()=>{
- expect(()=>assertUsdcVoteBuys([{mint:USDC_MINT},{}],57)).not.toThrow();
- expect(()=>assertUsdcVoteBuys([{mint:USDC_MINT},{mint:'So11111111111111111111111111111111111111112'}],57)).toThrow('non-USDC vote buy');
+ expect(()=>assertUsdcVoteBuys([{mint:USDC_MINT}],57)).not.toThrow();expect(()=>assertUsdcVoteBuys([],57)).not.toThrow();
+ expect(()=>assertUsdcVoteBuys([{mint:USDC_MINT},{mint:'So11111111111111111111111111111111111111112'}],57)).toThrow('non-USDC vote buy (mint So1');
+ // A missing or non-string mint is unknown, not USDC.
+ for(const buy of [{},{mint:null},{mint:7}]) expect(()=>assertUsdcVoteBuys([{mint:USDC_MINT},buy],57)).toThrow('mint missing or invalid');
 });
