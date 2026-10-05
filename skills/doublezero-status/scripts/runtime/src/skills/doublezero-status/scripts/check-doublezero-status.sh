@@ -11,9 +11,13 @@ if [ "$#" -lt 1 ]; then
   exit 2
 fi
 
+# Same selection as the other helpers: surrounding whitespace is ignored and a blank value is UTC.
+LOCAL_TIME_ZONE="${LOCAL_TIME_ZONE:-}"
+LOCAL_TIME_ZONE="${LOCAL_TIME_ZONE#"${LOCAL_TIME_ZONE%%[![:space:]]*}"}"
+LOCAL_TIME_ZONE="${LOCAL_TIME_ZONE%"${LOCAL_TIME_ZONE##*[![:space:]]}"}"
 LOCAL_TIME_ZONE="${LOCAL_TIME_ZONE:-UTC}"
 
-if [ ! -e "/usr/share/zoneinfo/$LOCAL_TIME_ZONE" ]; then
+if [ ! -f "/usr/share/zoneinfo/$LOCAL_TIME_ZONE" ]; then
   printf 'error: invalid LOCAL_TIME_ZONE: %s\n' "$LOCAL_TIME_ZONE" >&2
   exit 2
 fi
