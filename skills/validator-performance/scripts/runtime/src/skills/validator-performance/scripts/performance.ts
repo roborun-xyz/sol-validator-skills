@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { fetchSvtHistory, unavailableEpochsNote } from "../../shared/epoch-history";
+import { fetchSvtHistory, unavailableEpochsNote, toCount, leaderSkipRatePct } from "../../shared/epoch-history";
 import { lamportsToSol } from "../../shared/amounts";
 
 import { rpcCall as rpc, resolveOperator } from "../../shared/operator-config";
@@ -56,6 +56,7 @@ type PerfRow = {
   skipRatePct: number | null;
   commissionPct: number | null;
   mevCommissionPct: number | null;
+  inProgress: boolean;
 };
 
 type CurrentStatus = {
@@ -84,11 +85,6 @@ function toNumber(value: unknown): number | null {
     return Number(value);
   }
   return null;
-}
-
-function toCount(value: unknown): number | null {
-  const parsed = toNumber(value);
-  return parsed !== null && Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function toLamports(value: unknown): bigint | null {
@@ -131,17 +127,6 @@ async function fetchCurrentStatus(opts: Options, voteAccount: string): Promise<C
   }
 }
 
-// Skip rate comes only from leader-slot counts. SVT's `skippedSlots` is the vote-credit
-// shortfall (1 - tvCredits / max), not block production, so it is never a fallback.
-function parseSkipRatePct(row: SvtHistoryRow): number | null {
-  const leaderSlots = toCount(row.leaderSlotsTotal);
-  const blocksDone = toCount(row.leaderSlotsDone);
-  if (leaderSlots !== null && blocksDone !== null && leaderSlots > 0 && blocksDone <= leaderSlots) {
-    return ((leaderSlots - blocksDone) / leaderSlots) * 100;
-  }
-  return null;
-}
-
 function tvcPctOfMax(row: SvtHistoryRow): number | null {
   const credits = toCount(row.tvCredits);
   if (credits === null) return null;
@@ -152,10 +137,12 @@ function tvcPctOfMax(row: SvtHistoryRow): number | null {
   return (credits / max) * 100;
 }
 
-// An in-progress epoch cannot be compared with a full epoch's maximum credits.
+// An in-progress epoch cannot be compared with a full epoch's maximum credits, and upstream
+// publishes zero credits and leader slots for it as placeholders, not measurements.
 export function normalizePerformanceRow(row: SvtHistoryRow, inProgress = false): PerfRow {
-  const leaderSlots = toCount(row.leaderSlotsTotal);
-  const blocksProduced = toCount(row.leaderSlotsDone);
+  const placeholder = (count: number | null) => (inProgress && count === 0 ? null : count);
+  const leaderSlots = placeholder(toCount(row.leaderSlotsTotal));
+  const blocksProduced = leaderSlots === null && inProgress ? null : toCount(row.leaderSlotsDone);
   const blockProductionPct =
     leaderSlots !== null && blocksProduced !== null && leaderSlots > 0 && blocksProduced <= leaderSlots
       ? (blocksProduced / leaderSlots) * 100 : null;
@@ -164,16 +151,17 @@ export function normalizePerformanceRow(row: SvtHistoryRow, inProgress = false):
   return {
     epoch: row.epoch,
     stakeSol: stakeLamportsToSol(row.totalStake),
-    voteCredits: toCount(row.tvCredits),
+    voteCredits: placeholder(toCount(row.tvCredits)),
     tvcPctOfMax: inProgress ? null : tvcPctOfMax(row),
     // Ranks are 1-based; upstream publishes 0 as a placeholder.
     tvcRank: tvcRank === 0 ? null : tvcRank,
     blocksProduced,
     leaderSlots,
     blockProductionPct,
-    skipRatePct: parseSkipRatePct(row),
+    skipRatePct: leaderSkipRatePct(row.leaderSlotsTotal, row.leaderSlotsDone),
     commissionPct: toNumber(row.fee),
     mevCommissionPct: mevCommission === null ? null : mevCommission / 100,
+    inProgress,
   };
 }
 
@@ -219,8 +207,9 @@ function average(values: Array<number | null>): number | null {
   return filtered.reduce((a, b) => a + b, 0) / filtered.length;
 }
 
+// A total needs every epoch's value; an empty window has no total, not a total of zero.
 function sum(values: Array<number | null>): number | null {
-  if (values.some((value) => value === null)) return null;
+  if (!values.length || values.some((value) => value === null)) return null;
   return (values as number[]).reduce((a, b) => a + b, 0);
 }
 
@@ -340,6 +329,7 @@ export function renderCsv(rows: PerfRow[]): string {
     "skip_rate_pct",
     "commission_pct",
     "mev_commission_pct",
+    "in_progress",
   ];
   const body = rows.map((row) =>
     [
@@ -354,6 +344,7 @@ export function renderCsv(rows: PerfRow[]): string {
       row.skipRatePct === null ? "" : row.skipRatePct.toFixed(4),
       row.commissionPct ?? "",
       row.mevCommissionPct ?? "",
+      row.inProgress,
     ].join(","),
   );
   return [header.join(","), ...body].join("\n");

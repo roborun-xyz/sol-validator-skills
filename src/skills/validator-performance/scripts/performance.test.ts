@@ -11,7 +11,7 @@ test("missing upstream metrics stay unavailable rather than zero stake or 100 pe
     commissionPct: null, mevCommissionPct: null,
   });
   const csvValues = renderCsv([row]).split("\n")[1].split(",");
-  expect(csvValues).toEqual(["99", "", "", "", "", "", "10", "", "", "", ""]);
+  expect(csvValues).toEqual(["99", "", "", "", "", "", "10", "", "", "", "", "false"]);
   expect(JSON.parse(JSON.stringify(row)).blocksProduced).toBeNull();
 });
 
@@ -37,7 +37,13 @@ test("upstream skippedSlots is a vote-credit shortfall and never becomes a block
 test("an in-progress epoch is marked and excluded from the window summary", () => {
   const completed = normalizePerformanceRow({ ...source, epoch: 98, tvCredits: 6_912_000, tvcRank: 5, leaderSlotsTotal: 10, leaderSlotsDone: 10, fee: 5, mevCommission: 1000 });
   const partial = normalizePerformanceRow({ ...source, tvCredits: 0, tvcRank: 0, leaderSlotsTotal: 0, leaderSlotsDone: 0, fee: 5, mevCommission: 0, skippedSlots: 1 }, true);
-  expect(partial).toMatchObject({ tvcPctOfMax: null, tvcRank: null, skipRatePct: null });
+  // Upstream's zero credits and leader slots for the in-progress epoch are placeholders.
+  expect(partial).toMatchObject({ inProgress: true, voteCredits: null, leaderSlots: null, blocksProduced: null, tvcPctOfMax: null, tvcRank: null, skipRatePct: null });
+  expect(normalizePerformanceRow({ ...source, tvCredits: 1_000, leaderSlotsTotal: 4, leaderSlotsDone: 4 }, true)).toMatchObject({ voteCredits: 1_000, leaderSlots: 4, blocksProduced: 4 });
+  const csv = renderCsv([completed, partial]).split("\n").map((line) => line.split(","));
+  expect(csv[0].at(-1)).toBe("in_progress");
+  expect([csv[1].at(-1), csv[2].at(-1)]).toEqual(["false", "true"]);
+  expect(csv[2].slice(2, 7)).toEqual(["", "", "", "", ""]);
   const output = renderMarkdown({
     voteAccount: "fixture-vote", currentEpoch: 99, currentSlotIndex: 1, slotsInEpoch: 432_000,
     requestedFirstEpoch: 97, firstEpoch: 98, lastEpoch: 99, inProgressEpoch: 99, rows: [completed, partial],
@@ -51,6 +57,15 @@ test("an in-progress epoch is marked and excluded from the window summary", () =
   expect(output).toContain("Total vote credits: `6,912,000`");
   expect(output).toContain("history starts at epoch `98`, so epochs `97-97` are unavailable");
   expect(windowNotes({ firstEpoch: 98, lastEpoch: 99 })).toEqual([]);
+  // A window with no completed epoch has no totals; it must not print totals of zero.
+  const onlyPartial = renderMarkdown({
+    voteAccount: "fixture-vote", currentEpoch: 99, currentSlotIndex: 1, slotsInEpoch: 432_000,
+    firstEpoch: 99, lastEpoch: 99, inProgressEpoch: 99, rows: [partial],
+    current: { isDelinquent: null, activatedStakeSol: null, liveCommissionPct: null, nodePubkey: null },
+  });
+  expect(onlyPartial).toContain("Window summary (no completed epochs in the window):");
+  expect(onlyPartial).toContain("Total vote credits: `—`");
+  expect(onlyPartial).toContain("Block production: `— / —`");
 });
 
 test("markdown shows missing fields and does not present partial window sums as totals", () => {
