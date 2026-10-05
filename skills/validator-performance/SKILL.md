@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC.
 metadata:
   created: "2026-05-28"
-  last_updated: "2026-09-30"
+  last_updated: "2026-10-03"
 ---
 
 # Validator Performance
@@ -22,9 +22,15 @@ bun src/skills/validator-performance/scripts/performance.ts \
 
 Use `--validator <VOTE_OR_IDENTITY>` to resolve a current identity through Helius. Add `--include-current` only when in-progress data is requested. Output formats: `markdown`, `csv`, or `json`.
 
-The helper uses the repository Helius mainnet RPC for current epoch/vote state and JPool/SVT for historical epoch metrics. Apply the shared RPC selection policy in the runtime reference. No credential is bundled.
+The helper uses the operator-selected Helius mainnet RPC for current epoch/vote state and JPool/SVT for historical epoch metrics. Apply the shared RPC selection policy in the runtime reference. No credential is bundled.
 
-Report current state, completed epoch range, per-epoch metrics, totals/averages, and any missing upstream rows. Use `validator-revenue` when the question is about SOL earned.
+Report current state, completed epoch range, per-epoch metrics, totals/averages, and any unavailable epochs. Use `validator-revenue` when the question is about SOL earned.
+
+When JPool/SVT history starts after the requested first epoch, the helper shortens the window to the available epochs and states which requested epochs are unavailable (`requestedFirstEpoch` and `firstEpoch` in JSON; standard error for CSV). Repeat that scope whenever quoting totals. A gap after the first available epoch, or a missing latest epoch, still fails rather than producing a partial window.
+
+With `--include-current`, the in-progress epoch is listed and marked, but upstream publishes partial or placeholder values for it, so it is excluded from window totals and averages (`inProgressEpoch` in JSON). Do not read its row as a completed result.
+
+Skip rate and block production come only from leader-slot counts and are unavailable for an epoch without leader slots. JPool/SVT's `skippedSlots` field is the vote-credit shortfall, not a block skip rate, and is never used as one.
 
 ## Local profiles and first use
 

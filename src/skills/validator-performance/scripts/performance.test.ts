@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { normalizePerformanceRow, renderCsv, renderMarkdown } from "./performance";
+import { normalizePerformanceRow, renderCsv, renderMarkdown, windowNotes } from "./performance";
 
 const source = { epoch: 99, validatorId: "fixture-identity", voteId: "fixture-vote" };
 
@@ -26,9 +26,31 @@ test("invalid and null provider values do not become fabricated metrics", () => 
   expect(normalizePerformanceRow({ ...source, totalStake: Number.MAX_SAFE_INTEGER + 1 }).stakeSol).toBeNull();
 });
 
-test("available upstream skip rates survive missing block counts", () => {
-  expect(normalizePerformanceRow({ ...source, leaderSlotsTotal: 10, skippedSlots: "0.25" }).skipRatePct).toBe(25);
+test("upstream skippedSlots is a vote-credit shortfall and never becomes a block skip rate", () => {
+  expect(normalizePerformanceRow({ ...source, leaderSlotsTotal: 10, skippedSlots: "0.25" }).skipRatePct).toBeNull();
+  // Observed SVT placeholder for an in-progress epoch: no leader slots yet and skippedSlots 1.
+  expect(normalizePerformanceRow({ ...source, leaderSlotsTotal: 0, leaderSlotsDone: 0, skippedSlots: 1 }).skipRatePct).toBeNull();
   expect(normalizePerformanceRow({ ...source, leaderSlotsTotal: 0, leaderSlotsDone: 0 }).blockProductionPct).toBeNull();
+  expect(normalizePerformanceRow({ ...source, leaderSlotsTotal: 10, leaderSlotsDone: 9, skippedSlots: 0.001 }).skipRatePct).toBe(10);
+});
+
+test("an in-progress epoch is marked and excluded from the window summary", () => {
+  const completed = normalizePerformanceRow({ ...source, epoch: 98, tvCredits: 6_912_000, tvcRank: 5, leaderSlotsTotal: 10, leaderSlotsDone: 10, fee: 5, mevCommission: 1000 });
+  const partial = normalizePerformanceRow({ ...source, tvCredits: 0, tvcRank: 0, leaderSlotsTotal: 0, leaderSlotsDone: 0, fee: 5, mevCommission: 0, skippedSlots: 1 }, true);
+  expect(partial).toMatchObject({ tvcPctOfMax: null, tvcRank: null, skipRatePct: null });
+  const output = renderMarkdown({
+    voteAccount: "fixture-vote", currentEpoch: 99, currentSlotIndex: 1, slotsInEpoch: 432_000,
+    requestedFirstEpoch: 97, firstEpoch: 98, lastEpoch: 99, inProgressEpoch: 99, rows: [completed, partial],
+    current: { isDelinquent: null, activatedStakeSol: null, liveCommissionPct: null, nodePubkey: null },
+  });
+  expect(output).toContain("| 99 (in progress) |");
+  expect(output).toContain("Window summary (epochs `98-98`)");
+  expect(output).toContain("Avg TVC % of max: `100.00%`");
+  expect(output).toContain("Avg skip rate: `0.00%`");
+  expect(output).toContain("Avg MEV commission: `10.0%`");
+  expect(output).toContain("Total vote credits: `6,912,000`");
+  expect(output).toContain("history starts at epoch `98`, so epochs `97-97` are unavailable");
+  expect(windowNotes({ firstEpoch: 98, lastEpoch: 99 })).toEqual([]);
 });
 
 test("markdown shows missing fields and does not present partial window sums as totals", () => {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { fetchSvtHistory } from "../../shared/epoch-history";
+import { fetchSvtHistory, unavailableEpochsNote } from "../../shared/epoch-history";
 import { lamportsToSol } from "../../shared/amounts";
 
 import { rpcCall as rpc, resolveOperator } from "../../shared/operator-config";
@@ -131,16 +131,13 @@ async function fetchCurrentStatus(opts: Options, voteAccount: string): Promise<C
   }
 }
 
+// Skip rate comes only from leader-slot counts. SVT's `skippedSlots` is the vote-credit
+// shortfall (1 - tvCredits / max), not block production, so it is never a fallback.
 function parseSkipRatePct(row: SvtHistoryRow): number | null {
   const leaderSlots = toCount(row.leaderSlotsTotal);
   const blocksDone = toCount(row.leaderSlotsDone);
   if (leaderSlots !== null && blocksDone !== null && leaderSlots > 0 && blocksDone <= leaderSlots) {
     return ((leaderSlots - blocksDone) / leaderSlots) * 100;
-  }
-  if (row.skippedSlots !== undefined && row.skippedSlots !== null && row.skippedSlots !== "") {
-    const skipped = toNumber(row.skippedSlots);
-    if (skipped !== null && skipped >= 0 && skipped <= 1) return skipped * 100;
-    if (skipped !== null && skipped > 1 && skipped <= 100) return skipped;
   }
   return null;
 }
@@ -155,19 +152,22 @@ function tvcPctOfMax(row: SvtHistoryRow): number | null {
   return (credits / max) * 100;
 }
 
-export function normalizePerformanceRow(row: SvtHistoryRow): PerfRow {
+// An in-progress epoch cannot be compared with a full epoch's maximum credits.
+export function normalizePerformanceRow(row: SvtHistoryRow, inProgress = false): PerfRow {
   const leaderSlots = toCount(row.leaderSlotsTotal);
   const blocksProduced = toCount(row.leaderSlotsDone);
   const blockProductionPct =
     leaderSlots !== null && blocksProduced !== null && leaderSlots > 0 && blocksProduced <= leaderSlots
       ? (blocksProduced / leaderSlots) * 100 : null;
   const mevCommission = toNumber(row.mevCommission);
+  const tvcRank = toCount(row.tvcRank);
   return {
     epoch: row.epoch,
     stakeSol: stakeLamportsToSol(row.totalStake),
     voteCredits: toCount(row.tvCredits),
-    tvcPctOfMax: tvcPctOfMax(row),
-    tvcRank: toCount(row.tvcRank),
+    tvcPctOfMax: inProgress ? null : tvcPctOfMax(row),
+    // Ranks are 1-based; upstream publishes 0 as a placeholder.
+    tvcRank: tvcRank === 0 ? null : tvcRank,
     blocksProduced,
     leaderSlots,
     blockProductionPct,
@@ -181,29 +181,33 @@ async function collectRows(opts: Options, voteAccount: string): Promise<{
   currentEpoch: number;
   currentSlotIndex: number;
   slotsInEpoch: number;
+  requestedFirstEpoch: number;
   firstEpoch: number;
   lastEpoch: number;
+  inProgressEpoch: number | null;
   rows: PerfRow[];
   current: CurrentStatus;
 }> {
   const epochInfo = await rpc<EpochInfo>(opts.rpcUrl, "getEpochInfo");
   const currentEpoch = epochInfo.epoch;
   const lastEpoch = opts.includeCurrent ? currentEpoch : currentEpoch - 1;
-  const firstEpoch = lastEpoch - opts.epochs + 1;
+  const requestedFirstEpoch = lastEpoch - opts.epochs + 1;
 
   const [svtRows, current] = await Promise.all([
-    fetchSvtHistory<SvtHistoryRow>(voteAccount, firstEpoch, lastEpoch, opts.epochs),
+    fetchSvtHistory<SvtHistoryRow>(voteAccount, requestedFirstEpoch, lastEpoch, opts.epochs),
     fetchCurrentStatus(opts, voteAccount),
   ]);
 
-  const rows = svtRows.map(normalizePerformanceRow);
+  const rows = svtRows.map((row) => normalizePerformanceRow(row, row.epoch === currentEpoch));
 
   return {
     currentEpoch,
     currentSlotIndex: epochInfo.slotIndex,
     slotsInEpoch: epochInfo.slotsInEpoch,
-    firstEpoch,
+    requestedFirstEpoch,
+    firstEpoch: svtRows[0].epoch,
     lastEpoch,
+    inProgressEpoch: opts.includeCurrent ? currentEpoch : null,
     rows,
     current,
   };
@@ -235,13 +239,22 @@ function fmtRank(value: number | null): string {
   return `#${Math.round(value).toLocaleString("en-US")}`;
 }
 
-export function renderMarkdown(result: {
+type WindowScope = { requestedFirstEpoch?: number; firstEpoch: number; lastEpoch: number; inProgressEpoch?: number | null };
+
+/** Disclosures for a window that is shorter than requested or includes a partial epoch. */
+export function windowNotes(result: WindowScope): string[] {
+  const notes = unavailableEpochsNote(result.requestedFirstEpoch ?? result.firstEpoch, result.firstEpoch, result.lastEpoch);
+  if (result.inProgressEpoch != null) {
+    notes.push(`Epoch \`${result.inProgressEpoch}\` is in progress: its upstream values are partial or placeholders, and it is excluded from the window summary.`);
+  }
+  return notes;
+}
+
+export function renderMarkdown(result: WindowScope & {
   voteAccount: string;
   currentEpoch: number;
   currentSlotIndex: number;
   slotsInEpoch: number;
-  firstEpoch: number;
-  lastEpoch: number;
   rows: PerfRow[];
   current: CurrentStatus;
 }): string {
@@ -279,24 +292,29 @@ export function renderMarkdown(result: {
 
   for (const row of result.rows) {
     lines.push(
-      `| ${row.epoch} | ${fmtInt(row.stakeSol)} | ${fmtInt(row.voteCredits)} | ${fmtPct(row.tvcPctOfMax)} | ${fmtRank(row.tvcRank)} | ${fmtInt(row.blocksProduced)}/${fmtInt(row.leaderSlots)} | ${fmtPct(row.blockProductionPct)} | ${fmtPct(row.skipRatePct)} | ${fmtPct(row.commissionPct, 0)} | ${fmtPct(row.mevCommissionPct, 0)} |`,
+      `| ${row.epoch}${row.epoch === result.inProgressEpoch ? " (in progress)" : ""} | ${fmtInt(row.stakeSol)} | ${fmtInt(row.voteCredits)} | ${fmtPct(row.tvcPctOfMax)} | ${fmtRank(row.tvcRank)} | ${fmtInt(row.blocksProduced)}/${fmtInt(row.leaderSlots)} | ${fmtPct(row.blockProductionPct)} | ${fmtPct(row.skipRatePct)} | ${fmtPct(row.commissionPct, 0)} | ${fmtPct(row.mevCommissionPct, 0)} |`,
     );
   }
 
-  const avgTvcPct = average(result.rows.map((r) => r.tvcPctOfMax));
-  const avgSkip = average(result.rows.map((r) => r.skipRatePct));
-  const avgBlockProd = average(result.rows.map((r) => r.blockProductionPct));
-  const avgCommission = average(result.rows.map((r) => r.commissionPct));
-  const avgMevCommission = average(result.rows.map((r) => r.mevCommissionPct));
-  const totalCredits = sum(result.rows.map((r) => r.voteCredits));
-  const totalBlocks = sum(result.rows.map((r) => r.blocksProduced));
-  const totalLeaderSlots = sum(result.rows.map((r) => r.leaderSlots));
+  const completed = result.rows.filter((r) => r.epoch !== result.inProgressEpoch);
+  const lastCompletedEpoch = result.inProgressEpoch != null ? result.lastEpoch - 1 : result.lastEpoch;
+  const avgTvcPct = average(completed.map((r) => r.tvcPctOfMax));
+  const avgSkip = average(completed.map((r) => r.skipRatePct));
+  const avgBlockProd = average(completed.map((r) => r.blockProductionPct));
+  const avgCommission = average(completed.map((r) => r.commissionPct));
+  const avgMevCommission = average(completed.map((r) => r.mevCommissionPct));
+  const totalCredits = sum(completed.map((r) => r.voteCredits));
+  const totalBlocks = sum(completed.map((r) => r.blocksProduced));
+  const totalLeaderSlots = sum(completed.map((r) => r.leaderSlots));
 
   lines.push(
     "",
     "Unavailable values are shown as —. Averages use available epochs; totals require data for every epoch in the window.",
+    ...windowNotes(result).flatMap((note) => ["", note]),
     "",
-    `Window summary (epochs \`${result.firstEpoch}-${result.lastEpoch}\`):`,
+    completed.length
+      ? `Window summary (epochs \`${result.firstEpoch}-${lastCompletedEpoch}\`):`
+      : "Window summary (no completed epochs in the window):",
     "",
     `- Total vote credits: \`${fmtInt(totalCredits)}\``,
     `- Avg TVC % of max: \`${fmtPct(avgTvcPct)}\``,
@@ -351,8 +369,11 @@ async function main() {
   const payload = { voteAccount, ...result };
 
   if (opts.format === "json") console.log(JSON.stringify(payload, null, 2));
-  else if (opts.format === "csv") console.log(renderCsv(result.rows));
-  else console.log(renderMarkdown({ voteAccount, ...result }));
+  else if (opts.format === "csv") {
+    // CSV has no place for scope notes; keep them off stdout.
+    for (const note of windowNotes(result)) console.error(note);
+    console.log(renderCsv(result.rows));
+  } else console.log(renderMarkdown({ voteAccount, ...result }));
 }
 
 if (import.meta.main) {
