@@ -2,11 +2,11 @@
 
 import { localIso } from "../../shared/time";
 
-import { fetchSvtHistory } from "../../shared/epoch-history";
+import { fetchSvtHistory, unavailableEpochsNote } from "../../shared/epoch-history";
 import { lamportsToSol, LAMPORTS_PER_SOL } from "../../shared/amounts";
 
 import { fetchJson, fetchOptionalJson } from "../../shared/http";
-import { rpcCall as rpc, resolveOperator } from "../../shared/operator-config";
+import { rpcCall as rpc, resolveOperator, isPublicKey } from "../../shared/operator-config";
 
 import {
   verifyBamBoostClaimStatusAccount,
@@ -44,10 +44,13 @@ type BamBoostClaimStatus =
   | "not_applicable"
   | "not_available";
 
+type BamBoostIdentitySource = "trillium" | "svt-history";
+
 type BamBoostReward = {
   earningEpoch: number;
   claimEpoch: number;
   identityAccount: string | null;
+  identitySource: BamBoostIdentitySource | null;
   amount: bigint;
   status: BamBoostAllocationStatus;
 };
@@ -214,6 +217,7 @@ type RevenueRow = {
   bamBoostAllocatedSolEquivalent: number;
   bamBoostConversionStatus: BamBoostConversionStatus | "";
   bamBoostAllocationStatus: BamBoostAllocationStatus | "";
+  bamBoostIdentitySource: BamBoostIdentitySource | "";
   bamBoostClaimStatus: BamBoostClaimStatus | "";
   bamBoostClaimStatusAccount: string;
   bamBoostClaimedJitoSol: number;
@@ -343,10 +347,11 @@ async function fetchJitoCommissionRewards(
   return new Map(rewards.map((reward) => [reward.epoch, reward]));
 }
 
-async function fetchBamBoostRewards(
+export async function fetchBamBoostRewards(
   voteAccount: string,
   firstEpoch: number,
   lastEpoch: number,
+  fallbackIdentityByEpoch: Map<number, string> = new Map(),
 ): Promise<Map<number, BamBoostReward>> {
   const history = await fetchJson<TrilliumRow[]>(
     `${TRILLIUM_BASE_URL}/${voteAccount}`,
@@ -374,7 +379,12 @@ async function fetchBamBoostRewards(
       batch.map(async (earningEpoch): Promise<BamBoostReward> => {
         // JIP-31 publishes rewards earned in epoch N under the epoch N+1 distributor.
         const claimEpoch = earningEpoch + 1;
-        const identityAccount = identityByEpoch.get(earningEpoch) ?? null;
+        // Trillium serves only recent epochs; otherwise use the identity that the
+        // JPool/SVT history row records for the same epoch.
+        const trilliumIdentity = identityByEpoch.get(earningEpoch);
+        const identityAccount = trilliumIdentity ?? fallbackIdentityByEpoch.get(earningEpoch) ?? null;
+        const identitySource: BamBoostIdentitySource | null =
+          trilliumIdentity ? "trillium" : identityAccount ? "svt-history" : null;
         const entries = await fetchOptionalJson<BamBoostMerkleEntry[]>(
           `${BAM_BOOST_MERKLE_BASE_URL}/${claimEpoch}/merkle_tree.json`,
         );
@@ -383,6 +393,7 @@ async function fetchBamBoostRewards(
             earningEpoch,
             claimEpoch,
             identityAccount,
+            identitySource,
             amount: 0n,
             status: "not_published" as const,
           };
@@ -397,6 +408,7 @@ async function fetchBamBoostRewards(
             earningEpoch,
             claimEpoch,
             identityAccount,
+            identitySource,
             amount: 0n,
             status: "identity_missing" as const,
           };
@@ -413,6 +425,7 @@ async function fetchBamBoostRewards(
           earningEpoch,
           claimEpoch,
           identityAccount,
+          identitySource,
           amount,
           status:
             amount > 0n ? ("allocated" as const) : ("not_allocated" as const),
@@ -719,6 +732,7 @@ async function collectRows(
   voteAccount: string,
 ): Promise<{
   currentEpoch: number;
+  requestedFirstEpoch: number;
   firstEpoch: number;
   lastEpoch: number;
   rows: RevenueRow[];
@@ -728,20 +742,25 @@ async function collectRows(
   const epochInfo = await rpc<{ epoch: number }>(opts.rpcUrl, "getEpochInfo");
   const currentEpoch = epochInfo.epoch;
   const lastEpoch = opts.includeCurrent ? currentEpoch : currentEpoch - 1;
-  const firstEpoch = lastEpoch - opts.epochs + 1;
+  const requestedFirstEpoch = lastEpoch - opts.epochs + 1;
 
-  const [svtRows, marinadeBondCosts, bamBoostRewards, jitoCommissionRewards] =
+  // History that starts after the requested first epoch shortens every source's window.
+  const svtRows = await fetchSvtHistory<SvtHistoryRow>(voteAccount, requestedFirstEpoch, lastEpoch, opts.epochs);
+  const firstEpoch = svtRows[0].epoch;
+  const svtIdentityByEpoch = new Map(
+    svtRows.filter((row) => isPublicKey(row.validatorId)).map((row) => [row.epoch, row.validatorId]),
+  );
+  const [marinadeBondCosts, bamBoostRewards, jitoCommissionRewards] =
     await Promise.all([
-      fetchSvtHistory<SvtHistoryRow>(voteAccount, firstEpoch, lastEpoch, opts.epochs),
       fetchMarinadeBondCosts(voteAccount, firstEpoch, lastEpoch),
-      fetchBamBoostRewards(voteAccount, firstEpoch, lastEpoch),
+      fetchBamBoostRewards(voteAccount, firstEpoch, lastEpoch, svtIdentityByEpoch),
       fetchJitoCommissionRewards(voteAccount, firstEpoch, lastEpoch),
     ]);
   const [bamBoostConversions, bamBoostClaims] = await Promise.all([
     fetchBamBoostConversions(opts.rpcUrl, bamBoostRewards),
     fetchBamBoostClaims(opts.rpcUrl, bamBoostRewards),
   ]);
-  const rows = svtRows.map((row) => {
+  const rows = svtRows.map((row): RevenueRow => {
     const votingReward = toLamports(row.votingReward);
     const commissionReward = toLamports(row.commissionReward);
     const svtJitoInflow = toLamports(row.jitoReward);
@@ -776,6 +795,8 @@ async function collectRows(
       lamportsToSol(marinadeBondPayment) -
       (marinadeEstimate?.paymentSol ?? 0);
     const stakeSol = stakeLamportsToSol(row.totalStake);
+    const blocksProduced = Math.round(toNumber(row.leaderSlotsDone));
+    const leaderSlots = Math.round(toNumber(row.leaderSlotsTotal));
     const revenueBeforeComp = votingReward + commissionReward + jitoReward;
     const revenueBeforeCompSol =
       lamportsToSol(revenueBeforeComp) + bamBoostConversion.rewardSol;
@@ -810,6 +831,7 @@ async function collectRows(
       bamBoostAllocatedSolEquivalent: bamBoostConversion.rewardSol,
       bamBoostConversionStatus: bamBoostConversion.status,
       bamBoostAllocationStatus: bamBoostReward?.status ?? "identity_missing",
+      bamBoostIdentitySource: bamBoostReward?.identitySource ?? "",
       bamBoostClaimStatus: bamBoostClaim.status,
       bamBoostClaimStatusAccount: bamBoostClaim.claimStatusAccount ?? "",
       bamBoostClaimedJitoSol:
@@ -831,14 +853,19 @@ async function collectRows(
       marinadeEstimateSource: marinadeEstimate?.source ?? "",
       netRevenueSol: roundSol(netRevenueSol),
       preCompLamportsPerKiloStake: Math.round(preCompLamportsPerKiloStake),
-      blocksProduced: Math.round(toNumber(row.leaderSlotsDone)),
-      leaderSlots: Math.round(toNumber(row.leaderSlotsTotal)),
-      skipRate: String(row.skippedSlots ?? ""),
+      blocksProduced,
+      leaderSlots,
+      // SVT's skippedSlots is the vote-credit shortfall, not block production.
+      skipRate:
+        leaderSlots > 0 && blocksProduced <= leaderSlots
+          ? (((leaderSlots - blocksProduced) / leaderSlots) * 100).toFixed(4)
+          : "",
     };
   });
 
   return {
     currentEpoch,
+    requestedFirstEpoch,
     firstEpoch,
     lastEpoch,
     rows,
@@ -893,6 +920,7 @@ export function totals(rows: RevenueRow[]): RevenueRow {
       bamBoostAllocatedSolEquivalent: 0,
       bamBoostConversionStatus: "",
       bamBoostAllocationStatus: "",
+      bamBoostIdentitySource: "",
       bamBoostClaimStatus: "",
       bamBoostClaimStatusAccount: "",
       bamBoostClaimedJitoSol: 0,
@@ -952,6 +980,7 @@ function fmtInt(value: number): string {
 export function renderMarkdown(result: {
   voteAccount: string;
   currentEpoch: number;
+  requestedFirstEpoch?: number;
   firstEpoch: number;
   lastEpoch: number;
   rows: RevenueRow[];
@@ -979,6 +1008,7 @@ export function renderMarkdown(result: {
   const lines = [
     `As of current epoch \`${result.currentEpoch}\`, ${epochCoverage}.`,
     "",
+    ...unavailableEpochsNote(result.requestedFirstEpoch ?? result.firstEpoch, result.firstEpoch, result.lastEpoch).flatMap((note) => [note, ""]),
     revenueDefinition,
     "",
     jitoDefinition,
@@ -1002,7 +1032,7 @@ export function renderMarkdown(result: {
     const bamRate =
       row.bamBoostJitoSolToSolRate === null
         ? "-"
-        : `${row.bamBoostJitoSolToSolRate.toFixed(9)} @ ${row.bamBoostRateTimestampUtc} UTC / ${row.bamBoostRateTimestampLocal} Asia/Shanghai`;
+        : `${row.bamBoostJitoSolToSolRate.toFixed(9)} @ ${row.bamBoostRateTimestampUtc} UTC / ${row.bamBoostRateTimestampLocal} local`;
     lines.push(
       `| ${row.epoch} | ${fmtInt(row.stakeSol)} | ${fmtSol(row.votingRewardSol)} | ${fmtSol(row.commissionRewardSol)} | ${jitoCommission} | ${fmtSol(row.excludedSvtJitoInflowSol)} | ${fmtSol(row.bamBoostAllocatedJitoSol)} | ${bamRate} | ${fmtSol(row.bamBoostAllocatedSolEquivalent)} | ${fmtSol(row.bamBoostClaimedSolEquivalent)} | ${row.bamBoostClaimEpoch} ${row.bamBoostAllocationStatus}/${row.bamBoostClaimStatus} | ${fmtSol(row.votingCompensationSol)} | ${fmtSol(row.grossRevenueSol)} | ${fmtSol(row.votingFeeSol)}${bondCell} | ${fmtSol(row.netRevenueSol)} | ${fmtInt(row.preCompLamportsPerKiloStake)} | ${row.blocksProduced}/${row.leaderSlots} |`,
     );
@@ -1059,11 +1089,12 @@ export function renderCsv(rows: RevenueRow[], includeMarinadeBond: boolean): str
     "bam_boost_allocated_jitosol",
     "bam_boost_jitosol_to_sol_rate",
     "bam_boost_rate_timestamp_utc",
-    "bam_boost_rate_timestamp_asia_shanghai",
+    "bam_boost_rate_timestamp_local",
     "bam_boost_allocated_sol_equivalent",
     "bam_boost_conversion_status",
     "bam_boost_claim_epoch",
     "bam_boost_allocation_status",
+    "bam_boost_identity_source",
     "bam_boost_claim_status",
     "bam_boost_claim_status_account",
     "bam_boost_claimed_jitosol",
@@ -1099,6 +1130,7 @@ export function renderCsv(rows: RevenueRow[], includeMarinadeBond: boolean): str
       row.bamBoostConversionStatus,
       row.bamBoostClaimEpoch,
       row.bamBoostAllocationStatus,
+      row.bamBoostIdentitySource,
       row.bamBoostClaimStatus,
       row.bamBoostClaimStatusAccount,
       row.bamBoostClaimedJitoSol.toFixed(9),
@@ -1127,9 +1159,11 @@ async function main() {
   const payload = { voteAccount, ...result, totals: totals(result.rows) };
 
   if (opts.format === "json") console.log(JSON.stringify(payload, null, 2));
-  else if (opts.format === "csv")
+  else if (opts.format === "csv") {
+    // CSV has no place for scope notes; keep them off stdout.
+    for (const note of unavailableEpochsNote(result.requestedFirstEpoch, result.firstEpoch, result.lastEpoch)) console.error(note);
     console.log(renderCsv(result.rows, result.hasMarinadeBond));
-  else console.log(renderMarkdown({ voteAccount, ...result }));
+  } else console.log(renderMarkdown({ voteAccount, ...result }));
 }
 
 if (import.meta.main) {

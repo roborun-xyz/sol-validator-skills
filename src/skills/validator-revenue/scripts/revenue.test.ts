@@ -6,6 +6,7 @@ import {
   verifyBamBoostClaimStatusAccount,
   estimateMarinadePayment,
   fetchMarinadeBondCosts,
+  fetchBamBoostRewards,
   totals,
   renderCsv,
   renderMarkdown,
@@ -146,5 +147,40 @@ describe("pending Marinade bidding costs", () => {
       firstEpoch: 100, lastEpoch: 100, rows: [row], hasMarinadeBond: true, marinadeBondAccounts: [] });
     expect(md).toContain("includes estimated Marinade costs");
     expect(md).toContain("75000 SOL activated stake × effective bid 0.04");
+  });
+});
+
+describe("BAM Boost identity resolution", () => {
+  const OLDER_IDENTITY = "11111111111111111111111111111111";
+  async function rewards(fallback?: Map<number, string>) {
+    const mockFetch = Object.assign(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      // Trillium serves only the most recent epoch in this fixture.
+      if (url.includes("api.trillium.so")) return Response.json([{ epoch: 101, vote_account_pubkey: TEST_VOTE, identity_pubkey: R2D2_IDENTITY }]);
+      if (url.endsWith("/101/merkle_tree.json")) return Response.json([{ pubkey: OLDER_IDENTITY, amount: "7" }, { pubkey: "other", amount: "9" }]);
+      if (url.endsWith("/102/merkle_tree.json")) return Response.json([{ pubkey: R2D2_IDENTITY, amount: 5 }]);
+      throw new Error("Unexpected test URL");
+    }, { preconnect: globalThis.fetch.preconnect });
+    const fetchMock = spyOn(globalThis, "fetch").mockImplementation(mockFetch);
+    try { return await fetchBamBoostRewards(TEST_VOTE, 100, 101, fallback); }
+    finally { fetchMock.mockRestore(); }
+  }
+
+  test("epochs outside Trillium's window use the history row identity and record the source", async () => {
+    const result = await rewards(new Map([[100, OLDER_IDENTITY], [101, OLDER_IDENTITY]]));
+    expect(result.get(100)).toMatchObject({ status: "allocated", amount: 7n, identityAccount: OLDER_IDENTITY, identitySource: "svt-history" });
+    expect(result.get(101)).toMatchObject({ status: "allocated", amount: 5n, identityAccount: R2D2_IDENTITY, identitySource: "trillium" });
+  });
+
+  test("an epoch with no identity from either source stays identity_missing instead of zero", async () => {
+    expect((await rewards()).get(100)).toMatchObject({ status: "identity_missing", amount: 0n, identityAccount: null, identitySource: null });
+  });
+
+  test("CSV keeps header and row aligned with the identity source column", () => {
+    const row = { ...totals([]), epoch: 100, bamBoostIdentitySource: "svt-history" as const, skipRate: "2.5000" };
+    const csv = renderCsv([row], false).split("\n").map(line => line.split(","));
+    expect(csv[0]?.length).toBe(csv[1]?.length);
+    expect(csv[1]?.[csv[0]!.indexOf("bam_boost_identity_source")]).toBe("svt-history");
+    expect(csv[1]?.[csv[0]!.indexOf("skip_rate_pct")]).toBe("2.5000");
   });
 });
