@@ -21,10 +21,12 @@ test('epoch report arguments preserve overrides and reject missing values and un
 
 test('timestamp formatting preserves explicit offsets across midnight and daylight saving time',()=>{
  expect(localIso(new Date('2026-09-30T16:00:00Z'),'Asia/Shanghai')).toBe('2026-10-01T00:00:00+08:00');
- // Local time defaults to UTC; only a nonblank LOCAL_TIME_ZONE changes it.
- expect(localTimeZone({})).toBe('UTC');expect(localTimeZone({LOCAL_TIME_ZONE:'  '})).toBe('UTC');
- expect(localTimeZone({LOCAL_TIME_ZONE:' America/Los_Angeles '})).toBe('America/Los_Angeles');
- expect(localIso(new Date('2026-09-30T16:00:00Z'),localTimeZone({}))).toBe('2026-09-30T16:00:00+00:00');
+ // Local time is the machine's zone unless a nonblank LOCAL_TIME_ZONE selects another; UTC is the last resort.
+ const tokyo=()=>'Asia/Tokyo';
+ expect(localTimeZone({},tokyo)).toBe('Asia/Tokyo');expect(localTimeZone({LOCAL_TIME_ZONE:'  '},tokyo)).toBe('Asia/Tokyo');
+ expect(localTimeZone({LOCAL_TIME_ZONE:' America/Los_Angeles '},tokyo)).toBe('America/Los_Angeles');
+ expect(localTimeZone({},()=>undefined)).toBe('UTC');
+ expect(localIso(new Date('2026-09-30T16:00:00Z'),localTimeZone({},tokyo))).toBe('2026-10-01T01:00:00+09:00');
  expect(()=>localIso(new Date(),'Not/AZone')).toThrow();
  // An invalid selection is rejected when the zone is resolved, before anything is formatted.
  expect(()=>localTimeZone({LOCAL_TIME_ZONE:'Not/AZone'})).toThrow('Invalid LOCAL_TIME_ZONE: Not/AZone');

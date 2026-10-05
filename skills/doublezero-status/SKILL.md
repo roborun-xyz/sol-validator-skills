@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Bash and SSH. Targets need Linux, systemd, iproute2, GNU timeout and DoubleZero.
 metadata:
   created: "2026-06-12"
-  last_updated: "2026-10-03"
+  last_updated: "2026-10-05"
 ---
 
 # DoubleZero Status
@@ -29,7 +29,7 @@ Use the host aliases the user names. For a vague request like "check dz status",
 1. Resolve aliases and roles from operator-owned inventory (read `VALIDATOR_OPS_HOST_INVENTORY` or `~/.config/validator-ops/hosts.md`; see `references/inventory-references-hosts.md`). Do not treat a bundled example or another operator's inventory as a target selection.
 2. Run the helper from the resolved bundle root with the target SSH aliases.
 3. Report:
-   - UTC and local check time. The helper's local time defaults to UTC; override with `LOCAL_TIME_ZONE` when needed.
+   - UTC and local check time. The helper's local time uses the zone of the machine running it; override with `LOCAL_TIME_ZONE` when needed.
    - `doublezerod.service` active/substate, PID, restart count, and start timestamp.
    - `doublezero status` tunnel rows, especially `BGP Session Up`.
    - Edge signal: `P:edge-solana-shreds` present or missing.

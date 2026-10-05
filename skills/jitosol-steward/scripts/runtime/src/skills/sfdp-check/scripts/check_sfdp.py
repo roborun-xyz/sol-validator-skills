@@ -80,10 +80,10 @@ def load_fleet(path: str) -> tuple[dict[str, Any], list[ValidatorCheck]]:
 
 
 def local_time_zone() -> tzinfo:
-    """Zone for the reported local time: LOCAL_TIME_ZONE (an IANA name), otherwise UTC."""
+    """Zone for the reported local time: LOCAL_TIME_ZONE (an IANA name), otherwise this machine's zone."""
     name = os.environ.get("LOCAL_TIME_ZONE", "").strip()
     if not name:
-        return timezone.utc
+        return datetime.now().astimezone().tzinfo or timezone.utc
     try:
         return ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError, OSError) as exc:

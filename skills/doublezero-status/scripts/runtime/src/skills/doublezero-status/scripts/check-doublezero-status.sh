@@ -11,11 +11,19 @@ if [ "$#" -lt 1 ]; then
   exit 2
 fi
 
-# Same selection as the other helpers: surrounding whitespace is ignored and a blank value is UTC.
+# Same selection as the other helpers: surrounding whitespace is ignored, and a blank or
+# unset value means this machine's zone (TZ, then /etc/localtime), with UTC as the last resort.
 LOCAL_TIME_ZONE="${LOCAL_TIME_ZONE:-}"
 LOCAL_TIME_ZONE="${LOCAL_TIME_ZONE#"${LOCAL_TIME_ZONE%%[![:space:]]*}"}"
 LOCAL_TIME_ZONE="${LOCAL_TIME_ZONE%"${LOCAL_TIME_ZONE##*[![:space:]]}"}"
-LOCAL_TIME_ZONE="${LOCAL_TIME_ZONE:-UTC}"
+if [ -z "$LOCAL_TIME_ZONE" ]; then
+  if [ -n "${TZ:-}" ] && [ -f "/usr/share/zoneinfo/$TZ" ]; then
+    LOCAL_TIME_ZONE="$TZ"
+  else
+    LOCAL_TIME_ZONE="$(readlink /etc/localtime 2>/dev/null | sed -n 's#^.*/zoneinfo/##p')"
+  fi
+  LOCAL_TIME_ZONE="${LOCAL_TIME_ZONE:-UTC}"
+fi
 
 if [ ! -f "/usr/share/zoneinfo/$LOCAL_TIME_ZONE" ]; then
   printf 'error: invalid LOCAL_TIME_ZONE: %s\n' "$LOCAL_TIME_ZONE" >&2
