@@ -2,33 +2,57 @@
 
 import { createRpcContext } from "../../shared/operator-config.ts";
 import {
-  VOTEX_PROGRAM, VAULT_CONFIG, VAULT_GAUGEMEISTER, VAULT_ALLOWED_MINTS,
-  decodeVaultEpochInfo, votexStatsUrl, type VaultEpochInfo as EpochInfo,
+  VOTEX_PROGRAM, VAULT_CONFIG, VAULT_GAUGEMEISTER, VAULT_ALLOWED_MINTS, USDC_MINT,
+  decodeVaultEpochInfo, votexStatsUrl, assertUsdcVoteBuys, type VaultEpochInfo as EpochInfo,
 } from "../../shared/votex-accounts";
 
 import { base58Encode, base58Decode } from "../../shared/base58";
 import { fetchResponse, fetchJson } from "../../shared/http";
+import { localTimeZone } from "../../shared/time";
 
 import { createHash } from "node:crypto";
 
-const epochArg = process.argv[2];
-const asJson = process.argv.includes("--json");
-const skipNames = process.argv.includes("--no-names");
-const epochOnly = process.argv.includes("--epoch-only");
-const maxPagesArg = process.argv.find((arg) => arg.startsWith("--max-pages="));
-const maxPages = maxPagesArg ? Number(maxPagesArg.split("=")[1]) : 20;
-const localTimeZone = process.env.LOCAL_TIME_ZONE ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+function printUsage() {
+  console.error("Usage: bun scripts/votex_status.ts <epochId|current> [--json] [--no-names] [--epoch-only] [--max-pages N] [--rpc URL] [--config PATH] [--profile NAME]");
+}
+
+function usageError(): never {
+  printUsage();
+  process.exit(2);
+}
+
+if (process.argv.includes("--help")) { printUsage(); process.exit(0); }
+
+// Unknown, duplicate or incomplete options are errors, never silently ignored.
+let epochArg: string | undefined;
+let maxPagesRaw: string | undefined;
+const switches = new Set<string>();
+const seenOptions = new Set<string>();
+const cliArgs = process.argv.slice(2);
+for (let i = 0; i < cliArgs.length; i++) {
+  const [flag, ...inline] = cliArgs[i].split("=");
+  if (!flag.startsWith("--")) {
+    if (epochArg !== undefined) usageError();
+    epochArg = cliArgs[i];
+  } else if (seenOptions.has(flag)) usageError();
+  else if (["--json", "--no-names", "--epoch-only"].includes(flag) && !inline.length) switches.add(flag);
+  else if (["--max-pages", "--rpc", "--config", "--profile"].includes(flag)) {
+    const value = inline.length ? inline.join("=") : cliArgs[++i];
+    if (!value || value.startsWith("--")) usageError();
+    if (flag === "--max-pages") maxPagesRaw = value;
+  } else usageError();
+  seenOptions.add(flag);
+}
+const asJson = switches.has("--json");
+const skipNames = switches.has("--no-names");
+const epochOnly = switches.has("--epoch-only");
+const maxPages = maxPagesRaw === undefined ? 20 : /^\d+$/.test(maxPagesRaw) ? Number(maxPagesRaw) : Number.NaN;
+const timeZone = localTimeZone();
 const rpcContext = createRpcContext();
 
 function isCurrentEpochArg(value: string | undefined): boolean {
   return value === "current" || value === "now";
 }
-
-function printUsage() {
-  console.error("Usage: bun scripts/votex_status.ts <epochId|current> [--json] [--no-names] [--epoch-only] [--max-pages=N] [--rpc URL] [--config PATH] [--profile NAME]");
-}
-
-if (process.argv.includes("--help")) { printUsage(); process.exit(0); }
 
 if (!epochArg || (!/^\d+$/.test(epochArg) && !isCurrentEpochArg(epochArg)) || !Number.isSafeInteger(maxPages) || maxPages <= 0) {
   printUsage();
@@ -45,7 +69,6 @@ let targetEpoch = 0;
 let statsUrl = "";
 let currentEpochInfo: EpochInfo | null = null;
 
-const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const ASSOCIATED_TOKEN_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 const SYSTEM_PROGRAM = "11111111111111111111111111111111";
@@ -169,7 +192,7 @@ function fmtTime(unixSeconds: number | null): string {
   const date = new Date(unixSeconds * 1000);
   const utc = date.toISOString().replace(".000Z", "Z");
   const local = new Intl.DateTimeFormat("en-US", {
-    timeZone: localTimeZone,
+    timeZone,
     year: "numeric",
     month: "short",
     day: "2-digit",
@@ -229,6 +252,7 @@ async function buildFromPublishedStats(response: Response) {
     voteBuys: VoteBuy[];
   };
 
+  assertUsdcVoteBuys(stats.voteBuys, targetEpoch);
   const totalVevRaw = BigInt(stats.totalVev);
   const rows = stats.voteBuys.map((voteBuy) => ({
     gauge: voteBuy.gauge,

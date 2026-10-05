@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC.
 metadata:
   created: "2026-05-31"
-  last_updated: "2026-09-30"
+  last_updated: "2026-10-03"
 ---
 
 # Votex Status
@@ -20,10 +20,12 @@ Run from the resolved bundle root:
 bun src/skills/votex-status/scripts/votex_status.ts <epoch|current>
 ```
 
-Options: `--epoch-only`, `--json`, `--no-names`, and `--max-pages=N`.
+Options: `--epoch-only`, `--json`, `--no-names`, and `--max-pages N`. Unknown, duplicate or incomplete options are usage errors (exit `2`).
 
 For `current`, read the Vault gaugemeister; the active vote-buy target is `currentRewardsEpoch + 1`. Do not infer it from wall time.
 
 Use VotaFi `tribeca-stats` first. On HTTP 404, scan the epoch window for matching on-chain `IncreaseVoteBuy` transactions. The fallback reports bids/share but cannot calculate acquired veV. No stats and no transactions is a valid zero-bid state.
+
+Totals are USDC only: published stats that include a vote buy in another mint fail rather than being summed as USDC.
 
 Report source type, UTC/local epoch window, total bids, sorted rows, and whether veV is unavailable.
