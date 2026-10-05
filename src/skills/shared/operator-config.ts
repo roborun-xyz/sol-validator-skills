@@ -2,7 +2,7 @@ import { readFile, mkdir, writeFile, rename, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { fetchResponse } from './http';
+import { fetchResponse, TransportError } from './http';
 import { base58Decode } from './base58';
 
 export type Profile = {
@@ -153,7 +153,7 @@ export async function fetchRpcResponse(url: Parameters<typeof fetch>[0], init?: 
     const response = await fetchResponse(url, init);
     if (!response.ok) throw new Error();
     return response;
-  } catch { throw new Error('RPC transport failed; URL omitted.'); }
+  } catch { throw new TransportError('RPC transport failed; URL omitted.'); }
 }
 export async function rpcCall<T = any>(url: string, method: string, params: unknown = []): Promise<T> {
   try {
@@ -162,7 +162,7 @@ export async function rpcCall<T = any>(url: string, method: string, params: unkn
     const body: any = await response.json();
     if (body.error || !Object.hasOwn(body, 'result')) throw new Error();
     return body.result;
-  } catch { throw new Error(`RPC ${method} failed; check connectivity and credentials (URL omitted).`); }
+  } catch { throw new TransportError(`RPC ${method} failed; check connectivity and credentials (URL omitted).`); }
 }
 export async function verifyValidator(target: string, url: string, call: RpcCaller = rpcCall) {
   if (await call(url, 'getGenesisHash') !== MAINNET_GENESIS) throw new Error('RPC network mismatch: expected Solana mainnet-beta.');

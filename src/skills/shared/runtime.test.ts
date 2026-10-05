@@ -7,6 +7,7 @@ import {parseEpochQueryArgs, optionValue} from './cli';
 import {deriveBamBoostAddresses, deriveBamBoostClaimStatusAddress, verifyBamBoostClaimStatusAccount, BAM_BOOST_PROGRAM} from './bam-accounts';
 import {fetchSvtHistory, unavailableEpochsNote} from './epoch-history';
 import {pollReadOnly} from './poll';
+import {TransportError} from './http';
 
 const help = (): never => {throw new Error('help requested');};
 
@@ -81,9 +82,12 @@ test('read-only polling stops on the first defined value and stays bounded',asyn
  let calls=0;
  expect(await pollReadOnly(async()=>++calls<3?undefined:'ready',5,0)).toBe('ready');expect(calls).toBe(3);
  calls=0;expect(await pollReadOnly(async()=>{calls++;return undefined;},4,0)).toBeUndefined();expect(calls).toBe(4);
- // A transient read error is retried; only an error on the final attempt surfaces.
- calls=0;expect(await pollReadOnly(async()=>{if(++calls===1)throw new Error('transient');return 'ok';},3,0)).toBe('ok');
- calls=0;await expect(pollReadOnly(async()=>{calls++;throw new Error('still failing');},3,0)).rejects.toThrow('still failing');expect(calls).toBe(3);
+ // A transport error is retried; only one on the final attempt surfaces.
+ calls=0;expect(await pollReadOnly(async()=>{if(++calls===1)throw new TransportError('transient');return 'ok';},3,0)).toBe('ok');
+ calls=0;await expect(pollReadOnly(async()=>{calls++;throw new TransportError('still failing');},3,0)).rejects.toThrow('still failing');expect(calls).toBe(3);
+ // Any other error is a real failure: it surfaces at once unless the caller opts in.
+ calls=0;await expect(pollReadOnly(async()=>{calls++;throw new Error('invalid account');},3,0)).rejects.toThrow('invalid account');expect(calls).toBe(1);
+ calls=0;expect(await pollReadOnly(async()=>{if(++calls===1)throw new Error('read-only command failed');return 'ok';},3,0,()=>true)).toBe('ok');
 });
 
 test('published vote buys in another mint are rejected rather than summed as USDC',()=>{

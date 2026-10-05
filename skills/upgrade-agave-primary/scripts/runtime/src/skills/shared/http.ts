@@ -1,7 +1,10 @@
+/** A provider or network failure that a bounded read-only retry may outlast. */
+export class TransportError extends Error {}
+
 /** Every HTTP request uses the same timeout and refuses redirects. */
 export async function fetchResponse(url: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {
  try { return await fetch(url, {...init, redirect:'error', signal:AbortSignal.timeout(20000)}); }
- catch { throw new Error('HTTP transport failed; URL omitted.'); }
+ catch { throw new TransportError('HTTP transport failed; URL omitted.'); }
 }
 
 /** Read-only JSON fetches: bounded retries, no provider bodies/credentials in errors. */
@@ -13,7 +16,7 @@ export async function fetchJson<T>(url:string, init?:RequestInit, retries=4, opt
    if(!response.ok) throw new Error(`HTTP ${response.status}`);
    return await response.json() as T;
   } catch {
-   if(attempt>=retries) throw new Error('JSON request failed after bounded retries; check provider availability and credentials (URL and response body omitted).');
+   if(attempt>=retries) throw new TransportError('JSON request failed after bounded retries; check provider availability and credentials (URL and response body omitted).');
    await new Promise(resolve=>setTimeout(resolve,500*2**attempt));
   }
  }
