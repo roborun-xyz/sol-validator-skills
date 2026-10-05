@@ -742,7 +742,7 @@ async function collectRows(
   const epochInfo = await rpc<{ epoch: number }>(opts.rpcUrl, "getEpochInfo");
   const currentEpoch = epochInfo.epoch;
   const lastEpoch = opts.includeCurrent ? currentEpoch : currentEpoch - 1;
-  const requestedFirstEpoch = lastEpoch - opts.epochs + 1;
+  const requestedFirstEpoch = Math.max(0, lastEpoch - opts.epochs + 1);
 
   // History that starts after the requested first epoch shortens every source's window.
   const svtRows = await fetchSvtHistory<SvtHistoryRow>(voteAccount, requestedFirstEpoch, lastEpoch, opts.epochs);
@@ -974,6 +974,26 @@ function fmtInt(value: number): string {
   return Math.round(value).toLocaleString("en-US");
 }
 
+/**
+ * Disclosure for epochs whose BAM Boost identity came from the JPool/SVT row. That row is
+ * not verified to record the epoch's own identity, so a zero found under it is not a
+ * verified zero for a validator that has changed identity.
+ */
+export function bamBoostIdentityNote(rows: Array<Pick<RevenueRow, "epoch" | "bamBoostIdentitySource" | "bamBoostAllocationStatus">>): string[] {
+  const fallback = rows.filter((row) => row.bamBoostIdentitySource === "svt-history");
+  if (!fallback.length) return [];
+  const epochs = fallback.map((row) => row.epoch).sort((a, b) => a - b);
+  const ranges: string[] = [];
+  for (let start = 0; start < epochs.length; ) {
+    let end = start;
+    while (end + 1 < epochs.length && epochs[end + 1] === epochs[end] + 1) end++;
+    ranges.push(start === end ? `${epochs[start]}` : `${epochs[start]}-${epochs[end]}`);
+    start = end + 1;
+  }
+  const unallocated = fallback.filter((row) => row.bamBoostAllocationStatus === "not_allocated").length;
+  return [`BAM Boost identity for epochs \`${ranges.join(", ")}\` came from the JPool/SVT history row because Trillium does not cover them. That row is not verified to hold the identity used in that epoch, so if the validator has changed identity, the \`not_allocated\` result on ${unallocated} of these ${fallback.length} epoch(s) is not a verified zero.`];
+}
+
 export function renderMarkdown(result: {
   voteAccount: string;
   currentEpoch: number;
@@ -1034,6 +1054,8 @@ export function renderMarkdown(result: {
       `| ${row.epoch} | ${fmtInt(row.stakeSol)} | ${fmtSol(row.votingRewardSol)} | ${fmtSol(row.commissionRewardSol)} | ${jitoCommission} | ${fmtSol(row.excludedSvtJitoInflowSol)} | ${fmtSol(row.bamBoostAllocatedJitoSol)} | ${bamRate} | ${fmtSol(row.bamBoostAllocatedSolEquivalent)} | ${fmtSol(row.bamBoostClaimedSolEquivalent)} | ${row.bamBoostClaimEpoch} ${row.bamBoostAllocationStatus}/${row.bamBoostClaimStatus} | ${fmtSol(row.votingCompensationSol)} | ${fmtSol(row.grossRevenueSol)} | ${fmtSol(row.votingFeeSol)}${bondCell} | ${fmtSol(row.netRevenueSol)} | ${fmtInt(row.preCompLamportsPerKiloStake)} | ${row.blocksProduced}/${row.leaderSlots} |`,
     );
   }
+
+  lines.push(...bamBoostIdentityNote(result.rows).flatMap((note) => ["", note]));
 
   for (const row of result.rows.filter(row => row.marinadeBondPaymentStatus === "estimated")) {
     lines.push("", `Epoch ${row.epoch} Marinade estimate: ${row.marinadeActivatedStakeSol} SOL activated stake × effective bid ${row.marinadeEffectiveBid} (SOL per 1,000 SOL) / 1,000 = ${row.marinadeBondEstimatedPaymentSol} SOL. Source: ${row.marinadeEstimateSource}`);
@@ -1158,7 +1180,7 @@ async function main() {
   if (opts.format === "json") console.log(JSON.stringify(payload, null, 2));
   else if (opts.format === "csv") {
     // CSV has no place for scope notes; keep them off stdout.
-    for (const note of unavailableEpochsNote(result.requestedFirstEpoch, result.firstEpoch, result.lastEpoch)) console.error(note);
+    for (const note of [...unavailableEpochsNote(result.requestedFirstEpoch, result.firstEpoch, result.lastEpoch), ...bamBoostIdentityNote(result.rows)]) console.error(note);
     console.log(renderCsv(result.rows, result.hasMarinadeBond));
   } else console.log(renderMarkdown({ voteAccount, ...result }));
 }
