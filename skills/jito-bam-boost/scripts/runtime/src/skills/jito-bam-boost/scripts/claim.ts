@@ -5,8 +5,9 @@ import { localIso } from "../../shared/time";
 import { createRpcContext, rpcOptions } from "../../shared/operator-config.ts";
 import { BAM_BOOST_PROGRAM } from "../../shared/bam-accounts";
 import { lamportsToSol } from "../../shared/amounts";
+import { pollReadOnly } from "../../shared/poll";
 
-import { access, mkdir, stat } from "node:fs/promises";
+import { access, mkdir, rename, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -76,13 +77,21 @@ async function ensureOfficialCli(requestedDir?: string): Promise<string> {
       throw new Error(`--cli-dir is not an existing git checkout: ${cliDir}`);
     }
     await mkdir(resolve(cliDir, ".."), { recursive: true });
-    await run(["git", "clone", "--filter=blob:none", OFFICIAL_REPO, cliDir], {
-      stream: true,
-    });
-    await run(["git", "checkout", "--detach", PINNED_COMMIT], {
-      cwd: cliDir,
-      stream: true,
-    });
+    // Clone and pin in a staging directory so an interrupted setup never leaves
+    // an unpinned checkout at the cache path.
+    const staging = `${cliDir}.staging-${process.pid}`;
+    try {
+      await run(["git", "clone", "--filter=blob:none", OFFICIAL_REPO, staging], {
+        stream: true,
+      });
+      await run(["git", "checkout", "--detach", PINNED_COMMIT], {
+        cwd: staging,
+        stream: true,
+      });
+      await rename(staging, cliDir);
+    } finally {
+      await rm(staging, { recursive: true, force: true });
+    }
   }
 
   const origin = (
@@ -99,7 +108,7 @@ async function ensureOfficialCli(requestedDir?: string): Promise<string> {
   ).stdout.trim();
   if (head !== PINNED_COMMIT) {
     throw new Error(
-      `Official CLI checkout is at ${head}; expected pinned commit ${PINNED_COMMIT}`,
+      `Official CLI checkout ${cliDir} is at ${head}; expected pinned commit ${PINNED_COMMIT}. Remove or replace that checkout and rerun`,
     );
   }
   const dirty = (await run(["git", "status", "--porcelain", "--untracked-files=all"], {cwd: cliDir})).stdout.trim();
@@ -254,11 +263,16 @@ try {
     env: { RUST_LOG: "info" },
   });
 
-  const after = await checkBamBoost(checkOptions);
-  const verified = after.allocations.find(
-    (item) => item.claimEpoch === options.claimEpoch,
-  );
-  if (!verified || verified.status !== "claimed") {
+  // The CLI can return before every node serves the finalized Claim Status.
+  // Poll read-only within a fixed bound; this never resubmits.
+  const after = await pollReadOnly(async () => {
+    const result = await checkBamBoost(checkOptions);
+    const verified = result.allocations.find(
+      (item) => item.claimEpoch === options.claimEpoch,
+    );
+    return verified?.status === "claimed" ? result : undefined;
+  }, 10, 3_000);
+  if (!after) {
     throw new Error(
       "Transaction returned success, but finalized Claim Status verification did not show claimed",
     );

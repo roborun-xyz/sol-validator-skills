@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC. Approved claims also require Git, Cargo, Solana CLI and an operator-owned local signer.
 metadata:
   created: "2026-08-29"
-  last_updated: "2026-09-30"
+  last_updated: "2026-10-03"
 ---
 
 # Jito BAM Boost
@@ -39,7 +39,7 @@ bun src/skills/jito-bam-boost/scripts/check.ts \
   --format markdown
 ```
 
-The checker obtains the published mainnet claim epochs from Jito's public GCS bucket, reads each Merkle allocation, derives the official distributor and Claim Status PDAs, and checks finalized state through the repository Helius RPC. A positive allocation is claimable only when all of these are true:
+The checker obtains the published mainnet claim epochs from Jito's public GCS bucket, reads each Merkle allocation, derives the official distributor and Claim Status PDAs, and checks finalized state through the operator-selected Helius RPC. A positive allocation is claimable only when all of these are true:
 
 - no Claim Status account exists;
 - the distributor account exists;
@@ -53,7 +53,7 @@ Use `--claim-epoch <N>` to inspect one distributor. JSON is available with `--fo
 
 If nothing is claimable, report the finalized result and stop. Otherwise present one concise plan with:
 
-- UTC and Asia/Shanghai check time;
+- UTC and local check time;
 - validator identity and validated local keypair path;
 - each claim epoch and exact amount in JitoSOL lamports and JitoSOL;
 - current official SOL equivalent and rate timestamp;
@@ -84,9 +84,9 @@ For multiple approved epochs, run them in ascending order and stop after the fir
 
 ## Verify and report
 
-The wrapper requires finalized post-verification. Report:
+The wrapper requires finalized post-verification. It polls the finalized Claim Status read-only for a bounded period after the CLI returns and never resubmits. Report:
 
-- UTC and Asia/Shanghai completion time;
+- UTC and local completion time;
 - transaction signature;
 - identity, claim epoch, and distributor;
 - JitoSOL balance before and after, with the exact delta;
