@@ -21,6 +21,9 @@ import {
 
 const DEFAULT_APPROVAL_DRIFT_LAMPORTS = 100_000_000n;
 const MINIMUM_FEE_PAYER_LAMPORTS = 1_000_000n;
+// Vote fees the identity may pay between the preflight read and a later one. It is far
+// below the 1 SOL vote threshold, so it cannot hide a withdrawal that is not yet visible.
+const IDENTITY_FEE_DRIFT_ALLOWANCE_LAMPORTS = 10_000_000n;
 const EXPECTED_BONDS_PROGRAM = "vBoNdEvzMrSai7is21XgVYik65mqtaKXuSdMBJ1xkW4";
 
 const repoRoot = resolve(import.meta.dir, "../../../..");
@@ -100,6 +103,7 @@ type ParsedTransaction = {
     err: unknown;
     fee: number;
     logMessages?: string[] | null;
+    postBalances?: number[] | null;
   };
   transaction: {
     message: {
@@ -120,6 +124,7 @@ export type FundingTransactionMatch = {
   blockTime: number | null;
   slot: number;
   feeLamports: number;
+  identityPostBalanceLamports: number | null;
 };
 
 function usage(code = 2): never {
@@ -483,6 +488,7 @@ export function matchFundingTransaction(
       blockTime: transaction.blockTime,
       slot: transaction.slot,
       feeLamports: transaction.meta.fee,
+      identityPostBalanceLamports: transaction.meta.postBalances?.[keys.indexOf(expected.identity)] ?? null,
     };
   }
   return undefined;
@@ -511,6 +517,15 @@ async function findFundingTransaction(
 function assertSameBond(before: BondJson, after: BondJson, args: CliArgs): void {
   validateBond(after, args);
   if (after.publicKey !== before.publicKey) throw new Error("bond account changed after approval");
+}
+
+/**
+ * `show-bond` is a read-only CLI whose failures cannot be told apart, so a poll around it
+ * tolerates a few of them and then surfaces the error without spending the whole bound.
+ */
+function fewFailures(limit = 3): () => boolean {
+  let failures = 0;
+  return () => ++failures <= limit;
 }
 
 function stage(name: string, details: Record<string, unknown> = {}): void {
@@ -558,7 +573,8 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
   });
 
   const initialPlan = preflight.plan;
-  let currentPlan = initialPlan;
+  const voteRentLamports = BigInt(initialPlan.voteRentExemptLamports);
+  let currentIdentityLamports = BigInt(initialPlan.identityBalanceLamports);
   let currentBond = preflight.bond;
   let voteWithdrawalSignature: string | undefined;
 
@@ -586,20 +602,29 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
     await confirmFinalized(voteWithdrawalSignature);
     stage("vote-withdrawal-finalized", { signature: voteWithdrawalSignature });
 
-    // Wait within a fixed bound for the finalized withdrawal to be visible to these reads.
-    await pollReadOnly(async () => {
-      [currentPlan, currentBond] = await Promise.all([getPlan(args), getBond(args.voteAccount)]);
-      return currentPlan.voteBalanceLamports === currentPlan.voteRentExemptLamports ? true : undefined;
+    // Wait within a fixed bound for the finalized withdrawal to be visible in both balances
+    // it changes. The identity read sizes the bond funding, so a node that still serves
+    // the pre-withdrawal identity balance must not be accepted either.
+    const identityWithWithdrawal =
+      currentIdentityLamports + BigInt(initialPlan.voteTransferLamports) - IDENTITY_FEE_DRIFT_ALLOWANCE_LAMPORTS;
+    let [voteLamports, identityLamports] = [BigInt(initialPlan.voteBalanceLamports), currentIdentityLamports];
+    const visible = await pollReadOnly(async () => {
+      [voteLamports, identityLamports] = await Promise.all([getBalance(args.voteAccount), getBalance(args.identity)]);
+      return voteLamports === voteRentLamports && identityLamports >= identityWithWithdrawal ? true : undefined;
     });
-    assertSameBond(preflight.bond, currentBond, args);
-    if (currentPlan.voteBalanceLamports !== currentPlan.voteRentExemptLamports) {
+    if (voteLamports !== voteRentLamports) {
+      throw new Error(`vote balance ${voteLamports} does not equal rent reserve ${voteRentLamports}`);
+    }
+    if (!visible) {
       throw new Error(
-        `vote balance ${currentPlan.voteBalanceLamports} does not equal rent reserve ${currentPlan.voteRentExemptLamports}`,
+        `identity balance ${identityLamports} does not yet include the withdrawn ${initialPlan.voteTransferLamports} lamports; no bond funding was submitted`,
       );
     }
+    currentIdentityLamports = identityLamports;
+    currentBond = (await pollReadOnly(() => getBond(args.voteAccount), 20, 1_500, fewFailures()))!;
+    assertSameBond(preflight.bond, currentBond, args);
   }
 
-  const currentIdentityLamports = BigInt(currentPlan.identityBalanceLamports);
   const fundingLamports = calculateFundingAfterVote(initialPlan, currentIdentityLamports);
   if (fundingLamports > preflight.approvedCeilingLamports) {
     throw new Error(
@@ -653,17 +678,26 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
   stage("bond-funding-finalized", { signature: fundingTransaction.signature });
 
   // Same bound for the finalized funding to appear in the bond's owned amount.
-  let [finalPlan, finalBond] = [currentPlan, currentBond];
+  let finalBond = currentBond;
   await pollReadOnly(async () => {
-    [finalPlan, finalBond] = await Promise.all([getPlan(args), getBond(args.voteAccount)]);
+    finalBond = await getBond(args.voteAccount);
     return parseSolLamports(finalBond.amountOwned) - bondOwnedBeforeFundingLamports >= fundingLamports ? true : undefined;
-  });
+  }, 20, 1_500, fewFailures());
   assertSameBond(currentBond, finalBond, args);
-  if (initialPlan.voteAction === "withdraw-all" && finalPlan.voteBalanceLamports !== finalPlan.voteRentExemptLamports) {
-    throw new Error("final vote balance no longer equals its rent reserve");
-  }
-  if (BigInt(finalPlan.identityBalanceLamports) < IDENTITY_HARD_FLOOR_LAMPORTS) {
-    throw new Error(`final identity balance ${finalPlan.identityBalanceLamports} is below the 5 SOL hard floor`);
+  let [finalVoteLamports, finalIdentityLamports] = [voteRentLamports, currentIdentityLamports];
+  const voteAtReserve = await pollReadOnly(async () => {
+    [finalVoteLamports, finalIdentityLamports] = await Promise.all([getBalance(args.voteAccount), getBalance(args.identity)]);
+    return initialPlan.voteAction !== "withdraw-all" || finalVoteLamports === voteRentLamports ? true : undefined;
+  });
+  if (!voteAtReserve) throw new Error("final vote balance no longer equals its rent reserve");
+  // The hard floor is what the funding transaction left in the identity. A later read keeps
+  // falling as the identity pays vote fees, so it is reported below and not asserted.
+  const identityAfterFundingLamports =
+    fundingTransaction.match.identityPostBalanceLamports === null
+      ? finalIdentityLamports
+      : BigInt(fundingTransaction.match.identityPostBalanceLamports);
+  if (identityAfterFundingLamports < IDENTITY_HARD_FLOOR_LAMPORTS) {
+    throw new Error(`identity balance ${identityAfterFundingLamports} after funding is below the 5 SOL hard floor`);
   }
   const finalBondOwnedLamports = parseSolLamports(finalBond.amountOwned);
   if (finalBondOwnedLamports - bondOwnedBeforeFundingLamports < fundingLamports) {
@@ -692,12 +726,13 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
       fundedStakeAccount: fundingTransaction.match.stakeAccount,
       bondFundLamports: fundingLamports.toString(),
       bondFundSol: fundingSol,
+      identityBalanceAfterFundingLamports: identityAfterFundingLamports.toString(),
     },
     after: {
-      voteBalanceLamports: finalPlan.voteBalanceLamports,
-      voteRentLamports: finalPlan.voteRentExemptLamports,
-      identityBalanceLamports: finalPlan.identityBalanceLamports,
-      identityBalanceSol: finalPlan.identityBalanceSol,
+      voteBalanceLamports: finalVoteLamports.toString(),
+      voteRentLamports: voteRentLamports.toString(),
+      identityBalanceLamports: finalIdentityLamports.toString(),
+      identityBalanceSol: formatSol(finalIdentityLamports),
       bondOwnedLamports: finalBondOwnedLamports.toString(),
       bondOwned: finalBond.amountOwned,
       withdrawRequest: finalBond.withdrawRequest,

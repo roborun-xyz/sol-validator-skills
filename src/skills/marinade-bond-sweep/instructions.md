@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Bun 1.3.3, Node.js >=20.18.0, Solana CLI, validator-bonds CLI 2.6.0 and Helius mainnet RPC. Execution requires operator-owned local signers.
 metadata:
   created: "2026-08-24"
-  last_updated: "2026-10-03"
+  last_updated: "2026-10-05"
 ---
 
 # Marinade Bond Sweep
@@ -98,9 +98,11 @@ The executor re-runs one parallelized finalized preflight and refuses to sign un
 4. simulate the exact recalculated funding transaction;
 5. re-read the identity and require the same amount to leave at least the `5 SOL` hard floor;
 6. submit that exact amount at finalized commitment;
-7. resolve the funding signature from Helius and verify the `FundBond` transaction, funded stake account, final identity floor, vote rent reserve, bond ownership increase, and withdrawal state.
+7. resolve the funding signature from Helius and verify the `FundBond` transaction, funded stake account, the identity balance that transaction left against the `5 SOL` hard floor, vote rent reserve, bond ownership increase, and withdrawal state.
 
-After each submission the executor polls its read-only verification (signature status, vote balance, bond ownership) for a bounded period, so a lagging RPC node is not reported as a failed mutation. It never repeats a submission.
+After each submission the executor polls its read-only verification (signature status, vote and identity balances, bond ownership) for a bounded period, so a lagging RPC node is not reported as a failed mutation. It never repeats a submission. Funding is sized only from an identity balance that already includes the withdrawal. Only transport failures and a few failed `show-bond` reads are retried; a validation failure is reported at once.
+
+The hard floor is checked against the identity balance recorded in the funding transaction (`identityBalanceAfterFundingLamports`). The later `after.identityBalanceLamports` read keeps falling as the identity pays vote fees and can be slightly below `5 SOL`; that is not a floor violation.
 
 Do not replace this flow with manual commands after a successful Phase 1. Do not use `solana confirm -v`, because it prints the configured RPC URL; use the executor's redacted RPC verification.
 
@@ -115,4 +117,4 @@ Report the executor's UTC and local completion time, before/after balances in la
 - If vote withdrawal succeeds but funding fails, stop. Report that the surplus is now in the identity and include the finalized balances and vote-withdrawal signature. Never retry or improvise without a fresh plan and approval.
 - If RPC submission returns an ambiguous error, resolve the transaction signature and finalized status before considering any retry.
 - If balance drift would exceed the approved funding ceiling or consume the execution buffer and put the identity below the hard floor, stop and request a fresh approval; do not improvise another amount automatically.
-- If the final identity is below the `5 SOL` hard floor, report it as a safety failure immediately and do not perform another debit.
+- If the funding transaction left the identity below the `5 SOL` hard floor, report it as a safety failure immediately and do not perform another debit.

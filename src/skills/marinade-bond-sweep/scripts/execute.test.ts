@@ -78,6 +78,7 @@ describe("transaction parsing", () => {
           err: null,
           fee: 15_002,
           logMessages: ["Program log: Instruction: FundBond"],
+          postBalances: [26_858_640, 5_001_000_000, 1],
         },
         transaction: {
           message: {
@@ -100,7 +101,10 @@ describe("transaction parsing", () => {
       },
       { vote: "vote", identity: "identity", bond: "bond", amountLamports: 9_964_279_320n },
     );
-    expect(result).toEqual({ stakeAccount: "stake", blockTime: 456, slot: 123, feeLamports: 15_002 });
+    // The identity post-balance is the basis for the hard-floor check.
+    expect(result).toEqual({
+      stakeAccount: "stake", blockTime: 456, slot: 123, feeLamports: 15_002, identityPostBalanceLamports: 5_001_000_000,
+    });
   });
 });
 
@@ -108,6 +112,7 @@ test('funding verification rejects failed, unrelated and wrong-amount transactio
  const expected={vote:'vote',identity:'identity',bond:'bond',amountLamports:100n};
  const transaction={slot:1,blockTime:1,meta:{err:null as unknown,fee:1,logMessages:['Program log: Instruction: FundBond']},transaction:{message:{accountKeys:['vote','identity','bond'],instructions:[{program:'system',parsed:{type:'createAccount',info:{source:'identity',newAccount:'stake',lamports:100}}}]}}};
  expect(matchFundingTransaction(transaction,expected)?.stakeAccount).toBe('stake');
+ expect(matchFundingTransaction(transaction,expected)?.identityPostBalanceLamports).toBeNull();
  expect(matchFundingTransaction({...transaction,meta:{...transaction.meta,err:{InstructionError:[0,'error']}}},expected)).toBeUndefined();
  expect(matchFundingTransaction(transaction,{...expected,amountLamports:101n})).toBeUndefined();
  expect(matchFundingTransaction(transaction,{...expected,bond:'different-bond'})).toBeUndefined();
