@@ -72,7 +72,7 @@ export async function exportRelease(output:string,source=root) {
   await writeFile(path,bytes,{flag:'wx'}); await chmod(path,modes.get(file)!);
  }
  const now=new Date();
- const report={createdAtUtc:now.toISOString(),createdAtLocal:now.toLocaleString('sv-SE',{timeZoneName:'shortOffset'}),files:[...contents].map(([path,data])=>({path,sha256:createHash('sha256').update(data).digest('hex')}))};
+ const report={createdAtUtc:now.toISOString(),createdAtLocal:now.toLocaleString('sv-SE',{timeZone:process.env.LOCAL_TIME_ZONE?.trim()||'UTC',timeZoneName:'shortOffset'}),files:[...contents].map(([path,data])=>({path,sha256:createHash('sha256').update(data).digest('hex')}))};
  await writeFile(resolve(destination,'release-manifest.json'),JSON.stringify(report,null,2)+'\n',{flag:'wx'});
  return report;
 }

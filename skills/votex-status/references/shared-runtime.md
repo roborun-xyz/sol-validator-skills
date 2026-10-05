@@ -1,6 +1,6 @@
 ---
 created: 2026-09-16
-last_updated: 2026-09-30
+last_updated: 2026-10-03
 ---
 
 # Installed skill and operator configuration
@@ -36,4 +36,6 @@ Run onboarding's `onboard.ts status` to inspect all three resolved paths without
 
 Read only the configurations needed for the current task, reuse existing entries, and ask only for missing facts. Profiles do not need fleet or hosts. SFDP participation does not need SSH or host inventory. Upgrades require reviewed `hosts.md` plus live preflight; an SFDP fleet entry is insufficient.
 
-RPC URLs may be persisted in private operator configuration after onboarding; other secrets belong in runtime environment variables or an operator-managed secret store. A `.env` in an arbitrary session directory is not a portable credential source: load an operator-designated file explicitly or supply the environment to the process, without printing values or copying it into the installed bundle. Version 2 profiles store public identifiers and private `rpcUrl` values, with no `rpcEnv` field or execution approvals. Resolve RPC as `--rpc` → `SOLANA_RPC_URL` → selected profile URL; blank environment values fall back. Legacy version 1 environment references remain readable until explicit migration. Status reports only public fields and RPC availability/source, never URLs. Keep credential-bearing configuration outside the repository and installed bundle with mode 0600.
+RPC URLs may be persisted in private operator configuration after onboarding; other secrets belong in runtime environment variables or an operator-managed secret store. A `.env` in an arbitrary session directory is not a portable credential source: load an operator-designated file explicitly or supply the environment to the process, without printing values or copying it into the installed bundle. Version 2 profiles store public identifiers and private `rpcUrl` values, with no `rpcEnv` field or execution approvals. Resolve RPC as `--rpc` → `SOLANA_RPC_URL` → selected profile URL; blank environment values fall back. With several saved profiles and no default, a helper that needs only an RPC URL still requires `--profile NAME` (or one of those overrides); it never picks a profile on its own. Legacy version 1 environment references remain readable until explicit migration. Status reports only public fields and RPC availability/source, never URLs. Keep credential-bearing configuration outside the repository and installed bundle with mode 0600.
+
+Helpers report UTC and a local time. The local zone defaults to UTC; set `LOCAL_TIME_ZONE` to an IANA zone name such as `America/Los_Angeles` to change it for every helper. An invalid name is an error, not a fallback to another zone.

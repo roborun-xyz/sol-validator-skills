@@ -1,11 +1,12 @@
 import {test, expect} from 'bun:test';
 import {PublicKey} from '@solana/web3.js';
-import {localIso} from './time';
+import {localIso, localTimeZone} from './time';
 import {formatSol, lamportsToSol} from './amounts';
-import {decodeVaultEpochInfo} from './votex-accounts';
+import {decodeVaultEpochInfo, assertUsdcVoteBuys, USDC_MINT} from './votex-accounts';
 import {parseEpochQueryArgs, optionValue} from './cli';
 import {deriveBamBoostAddresses, deriveBamBoostClaimStatusAddress, verifyBamBoostClaimStatusAccount, BAM_BOOST_PROGRAM} from './bam-accounts';
-import {fetchSvtHistory} from './epoch-history';
+import {fetchSvtHistory, unavailableEpochsNote} from './epoch-history';
+import {pollReadOnly} from './poll';
 
 const help = (): never => {throw new Error('help requested');};
 
@@ -18,7 +19,12 @@ test('epoch report arguments preserve overrides and reject missing values and un
 });
 
 test('timestamp formatting preserves explicit offsets across midnight and daylight saving time',()=>{
- expect(localIso(new Date('2026-09-30T16:00:00Z'))).toBe('2026-10-01T00:00:00+08:00');
+ expect(localIso(new Date('2026-09-30T16:00:00Z'),'Asia/Shanghai')).toBe('2026-10-01T00:00:00+08:00');
+ // Local time defaults to UTC; only a nonblank LOCAL_TIME_ZONE changes it.
+ expect(localTimeZone({})).toBe('UTC');expect(localTimeZone({LOCAL_TIME_ZONE:'  '})).toBe('UTC');
+ expect(localTimeZone({LOCAL_TIME_ZONE:' America/Los_Angeles '})).toBe('America/Los_Angeles');
+ expect(localIso(new Date('2026-09-30T16:00:00Z'),localTimeZone({}))).toBe('2026-09-30T16:00:00+00:00');
+ expect(()=>localIso(new Date(),'Not/AZone')).toThrow();
  expect(localIso(new Date('2026-07-01T00:00:00Z'),'America/Los_Angeles')).toBe('2026-06-30T17:00:00-07:00');
  expect(localIso(new Date('2026-01-01T00:00:00Z'),'America/Los_Angeles')).toBe('2025-12-31T16:00:00-08:00');
  expect(localIso(new Date('2026-09-30T00:00:00Z'),'UTC')).toBe('2026-09-30T00:00:00+00:00');
@@ -62,5 +68,25 @@ test('shared SVT history filters and orders rows while rejecting incomplete wind
   }) as typeof fetch;
   expect(await fetchSvtHistory('fixture-vote',99,101,3)).toEqual([{epoch:99},{epoch:100},{epoch:101}]);
   rows=[{epoch:99},{epoch:101}];await expect(fetchSvtHistory('fixture-vote',99,101,3)).rejects.toThrow('missing epoch(s): 100');
+  // History that starts late shortens the window; a missing latest epoch or no rows still fails.
+  rows=[{epoch:100},{epoch:101}];expect(await fetchSvtHistory('fixture-vote',99,101,3)).toEqual([{epoch:100},{epoch:101}]);
+  rows=[{epoch:99},{epoch:100}];await expect(fetchSvtHistory('fixture-vote',99,101,3)).rejects.toThrow('missing epoch(s): 101');
+  rows=[{epoch:98}];await expect(fetchSvtHistory('fixture-vote',99,101,3)).rejects.toThrow('no rows for epochs 99-101');
+  expect(unavailableEpochsNote(99,100,101)).toEqual(['Requested epochs `99-101`; JPool/SVT history starts at epoch `100`, so epochs `99-99` are unavailable and excluded.']);
+  expect(unavailableEpochsNote(99,99,101)).toEqual([]);
  } finally {globalThis.fetch=original;}
+});
+
+test('read-only polling stops on the first defined value and stays bounded',async()=>{
+ let calls=0;
+ expect(await pollReadOnly(async()=>++calls<3?undefined:'ready',5,0)).toBe('ready');expect(calls).toBe(3);
+ calls=0;expect(await pollReadOnly(async()=>{calls++;return undefined;},4,0)).toBeUndefined();expect(calls).toBe(4);
+ // A transient read error is retried; only an error on the final attempt surfaces.
+ calls=0;expect(await pollReadOnly(async()=>{if(++calls===1)throw new Error('transient');return 'ok';},3,0)).toBe('ok');
+ calls=0;await expect(pollReadOnly(async()=>{calls++;throw new Error('still failing');},3,0)).rejects.toThrow('still failing');expect(calls).toBe(3);
+});
+
+test('published vote buys in another mint are rejected rather than summed as USDC',()=>{
+ expect(()=>assertUsdcVoteBuys([{mint:USDC_MINT},{}],57)).not.toThrow();
+ expect(()=>assertUsdcVoteBuys([{mint:USDC_MINT},{mint:'So11111111111111111111111111111111111111112'}],57)).toThrow('non-USDC vote buy');
 });

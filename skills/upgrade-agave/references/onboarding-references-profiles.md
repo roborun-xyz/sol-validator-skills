@@ -1,6 +1,6 @@
 ---
 created: 2026-09-15
-last_updated: 2026-09-30
+last_updated: 2026-10-03
 ---
 
 # Local operator profiles
@@ -45,7 +45,7 @@ Saved shape (illustrative public keys):
 
 The placeholder public keys must be replaced through onboarding; do not copy this example as a working profile.
 
-The example timestamp is 2026-09-15 00:00 UTC / 08:00 Asia/Shanghai. Actual timestamps are produced by the verifier. Onboarding output includes UTC and the local runtime timezone (override with `LOCAL_TIME_ZONE`). A stored timestamp records the last add/refresh; scripts recheck the relationship rather than treating this as permanent verification.
+The example timestamp is 2026-09-15 00:00 UTC. Actual timestamps are produced by the verifier. Onboarding output includes UTC and local time; the local zone defaults to UTC (override with `LOCAL_TIME_ZONE`). A stored timestamp records the last add/refresh; scripts recheck the relationship rather than treating this as permanent verification.
 
 ## Chain query first use
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { configurationStatus } from './status';
 import { readConfig, saveConfig, configPath, selectInput, selectRpc, verifyValidator, type Config } from '../../shared/operator-config';
+import { localTimeZone as selectedTimeZone } from '../../shared/time';
 
 export async function main(args: string[]) {
   const command = args.shift() ?? 'status';
@@ -47,7 +48,7 @@ export async function main(args: string[]) {
   const selected=selectInput({validator:target ?? old?.voteAccount, rpcUrl:rpcUrl ?? old?.rpcUrl, ...(old ? {profile:name} : {})}, config);
   const live=await verifyValidator(selected.target,selected.rpcUrl);
   const checkedAt=new Date().toISOString();
-  const localTimeZone=process.env.LOCAL_TIME_ZONE || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const localTimeZone=selectedTimeZone();
   const checkedAtLocal=new Date(checkedAt).toLocaleString('sv-SE',{timeZone:localTimeZone});
   Object.defineProperty(config.profiles,name,{value:{cluster:'mainnet-beta',...live,rpcUrl:selected.rpcUrl,verification:{source:'helius-rpc',checkedAt}},enumerable:true,writable:true,configurable:true});
   if(makeDefault) config.defaultProfile=name;

@@ -7,7 +7,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 import re
 import shlex
 import subprocess
@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 API_BASE = "https://api.solana.org/api/community/v1"
@@ -76,6 +77,17 @@ def load_fleet(path: str) -> tuple[dict[str, Any], list[ValidatorCheck]]:
         seen.add((item.host, item.rpc_port))
         checks.append(item)
     return groups, checks
+
+
+def local_time_zone() -> tzinfo:
+    """Zone for the reported local time: LOCAL_TIME_ZONE (an IANA name), otherwise UTC."""
+    name = os.environ.get("LOCAL_TIME_ZONE", "").strip()
+    if not name:
+        return timezone.utc
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, OSError) as exc:
+        raise ValueError(f"Invalid LOCAL_TIME_ZONE: {name}") from exc
 
 
 def fetch_json(url: str, timeout: int) -> Any:
@@ -208,6 +220,7 @@ def find_participant(participants: list[dict[str, Any]], keys: dict[str, str]) -
 
 def collect(args: argparse.Namespace) -> dict[str, Any]:
     groups, configured_checks = load_fleet(args.fleet)
+    local_zone = local_time_zone()  # Reject an invalid zone before any network call.
     if not args.api_only and not configured_checks:
         raise ValueError("No hosts configured; use --api-only or onboard a host")
     required = {}
@@ -290,7 +303,7 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     return {
         "checked_at_utc": now.isoformat(),
-        "checked_at_local": now.astimezone().isoformat(),
+        "checked_at_local": now.astimezone(local_zone).isoformat(),
         "required_versions": required,
         "participants": participant_results,
         "checks": checks,

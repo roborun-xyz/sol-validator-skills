@@ -54,7 +54,7 @@ test('fresh HOME defaults resolve outside cwd and profile status survives absent
  const dir=await mkdtemp(join(tmpdir(),'onboard-home-'));
  const bundle=join(dir,'installed');
  try {
-  for(const relative of ['onboarding/scripts/onboard.ts','onboarding/scripts/status.ts','shared/operator-config.ts','shared/base58.ts','shared/http.ts'])
+  for(const relative of ['onboarding/scripts/onboard.ts','onboarding/scripts/status.ts','shared/operator-config.ts','shared/base58.ts','shared/http.ts','shared/time.ts'])
    await Bun.write(join(bundle,'src/skills',relative),await Bun.file(resolve(import.meta.dir,'..',relative)).text());
   const home=join(dir,'operator');
   await Bun.write(join(home,'.config/validator-ops/config.json'),JSON.stringify({version:1,profiles:{}}));

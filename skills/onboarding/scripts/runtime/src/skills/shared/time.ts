@@ -1,5 +1,10 @@
-/** ISO local time with an explicit offset; callers retain their chosen timezone. */
-export function localIso(date: Date, timeZone = 'Asia/Shanghai'): string {
+/** Zone for the "local" time in helper output: `LOCAL_TIME_ZONE` (an IANA name), otherwise UTC. */
+export function localTimeZone(env: Record<string, string | undefined> = process.env): string {
+  return env.LOCAL_TIME_ZONE?.trim() || 'UTC';
+}
+
+/** ISO local time with an explicit offset, in the selected zone unless a caller passes one. */
+export function localIso(date: Date, timeZone = localTimeZone()): string {
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone, year:'numeric', month:'2-digit', day:'2-digit',
     hour:'2-digit', minute:'2-digit', second:'2-digit',
