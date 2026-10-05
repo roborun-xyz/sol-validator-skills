@@ -179,7 +179,7 @@ async function collectRows(opts: Options, voteAccount: string): Promise<{
   const epochInfo = await rpc<EpochInfo>(opts.rpcUrl, "getEpochInfo");
   const currentEpoch = epochInfo.epoch;
   const lastEpoch = opts.includeCurrent ? currentEpoch : currentEpoch - 1;
-  const requestedFirstEpoch = lastEpoch - opts.epochs + 1;
+  const requestedFirstEpoch = Math.max(0, lastEpoch - opts.epochs + 1);
 
   const [svtRows, current] = await Promise.all([
     fetchSvtHistory<SvtHistoryRow>(voteAccount, requestedFirstEpoch, lastEpoch, opts.epochs),

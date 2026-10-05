@@ -55,7 +55,7 @@ test("an in-progress epoch is marked and excluded from the window summary", () =
   expect(output).toContain("Avg skip rate: `0.00%`");
   expect(output).toContain("Avg MEV commission: `10.0%`");
   expect(output).toContain("Total vote credits: `6,912,000`");
-  expect(output).toContain("history starts at epoch `98`, so epochs `97-97` are unavailable");
+  expect(output).toContain("returned no rows before epoch `98`, so epochs `97-97` are unavailable");
   expect(windowNotes({ firstEpoch: 98, lastEpoch: 99 })).toEqual([]);
   // A window with no completed epoch has no totals; it must not print totals of zero.
   const onlyPartial = renderMarkdown({

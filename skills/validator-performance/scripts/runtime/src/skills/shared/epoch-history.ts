@@ -1,9 +1,11 @@
 import { fetchJson } from './http';
 
 /**
- * Revenue and performance share one contiguous window ending at lastEpoch. History that
- * begins after firstEpoch (a newer validator) shortens the window, and callers disclose
- * the unavailable epochs. A gap after the first available epoch is missing data and fails.
+ * Revenue and performance share one contiguous window ending at lastEpoch. Rows that begin
+ * after firstEpoch shorten the window, and callers disclose the unavailable epochs. That is
+ * expected for a newer validator, but upstream rows missing at the start of the window look
+ * identical, so the disclosure states what was returned, not why. A gap after the first
+ * available epoch is missing data and fails.
  */
 export async function fetchSvtHistory<Row extends {epoch: number}>(
   voteAccount: string, firstEpoch: number, lastEpoch: number, epochCount: number,
@@ -40,8 +42,8 @@ export function leaderSkipRatePct(leaderSlotsTotal: unknown, leaderSlotsDone: un
   return ((leaderSlots - blocksDone) / leaderSlots) * 100;
 }
 
-/** One disclosure for a window shortened by late-starting history; empty when complete. */
+/** One disclosure for a window with no rows for its first requested epochs; empty when complete. */
 export function unavailableEpochsNote(requestedFirstEpoch: number, firstEpoch: number, lastEpoch: number): string[] {
   if (requestedFirstEpoch >= firstEpoch) return [];
-  return [`Requested epochs \`${requestedFirstEpoch}-${lastEpoch}\`; JPool/SVT history starts at epoch \`${firstEpoch}\`, so epochs \`${requestedFirstEpoch}-${firstEpoch - 1}\` are unavailable and excluded.`];
+  return [`Requested epochs \`${requestedFirstEpoch}-${lastEpoch}\`; JPool/SVT returned no rows before epoch \`${firstEpoch}\`, so epochs \`${requestedFirstEpoch}-${firstEpoch - 1}\` are unavailable and excluded. A validator that started later and rows missing upstream look the same here.`];
 }

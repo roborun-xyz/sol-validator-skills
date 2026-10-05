@@ -73,7 +73,7 @@ test('shared SVT history filters and orders rows while rejecting incomplete wind
   rows=[{epoch:100},{epoch:101}];expect(await fetchSvtHistory('fixture-vote',99,101,3)).toEqual([{epoch:100},{epoch:101}]);
   rows=[{epoch:99},{epoch:100}];await expect(fetchSvtHistory('fixture-vote',99,101,3)).rejects.toThrow('missing epoch(s): 101');
   rows=[{epoch:98}];await expect(fetchSvtHistory('fixture-vote',99,101,3)).rejects.toThrow('no rows for epochs 99-101');
-  expect(unavailableEpochsNote(99,100,101)).toEqual(['Requested epochs `99-101`; JPool/SVT history starts at epoch `100`, so epochs `99-99` are unavailable and excluded.']);
+  expect(unavailableEpochsNote(99,100,101)).toEqual(['Requested epochs `99-101`; JPool/SVT returned no rows before epoch `100`, so epochs `99-99` are unavailable and excluded. A validator that started later and rows missing upstream look the same here.']);
   expect(unavailableEpochsNote(99,99,101)).toEqual([]);
  } finally {globalThis.fetch=original;}
 });
