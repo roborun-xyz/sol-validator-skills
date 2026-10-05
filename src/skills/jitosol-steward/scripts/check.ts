@@ -12,7 +12,13 @@ export async function checkSteward(input:Input,includePool=false,call:RpcCaller=
   if(decodeConfig(snapshot.value[0]).validatorList!==validatorList) throw new Error('Steward validator list changed during discovery; rerun');
   const decoded=decodeSnapshot(snapshot.value[1],snapshot.value[2],snapshot.value[3],validatorList);
   const epochInfo=await call(target.rpcUrl,'getEpochInfo',[{commitment:'finalized'}]);
-  if(!Number.isSafeInteger(epochInfo?.epoch) || epochInfo.epoch<decoded.stateEpoch || epochInfo.epoch-decoded.stateEpoch>1 || decoded.nextCycleEpoch<epochInfo.epoch || decoded.nextCycleEpoch-epochInfo.epoch>100) throw new Error('Invalid current epoch');
+  // Each rejected condition names its own cause; none is replaced with a partial result.
+  if(!Number.isSafeInteger(epochInfo?.epoch)) throw new Error('Invalid RPC epoch response');
+  const current=epochInfo.epoch;
+  if(current<decoded.stateEpoch) throw new Error(`Steward state epoch ${decoded.stateEpoch} is ahead of finalized epoch ${current}; rerun`);
+  if(current-decoded.stateEpoch>1) throw new Error(`Steward state is stale: state epoch ${decoded.stateEpoch}, finalized epoch ${current}`);
+  if(decoded.nextCycleEpoch<current) throw new Error(`Steward next cycle epoch ${decoded.nextCycleEpoch} is behind finalized epoch ${current}`);
+  if(decoded.nextCycleEpoch-current>100) throw new Error(`Implausible Steward next cycle epoch ${decoded.nextCycleEpoch} at finalized epoch ${current}`);
   const now=new Date();
   const validator=decoded.validators.find(v=>v.voteAccount===target.voteAccount)??null;
   const {validators,...cycle}=decoded;
