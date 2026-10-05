@@ -7,8 +7,8 @@ import { BAM_BOOST_PROGRAM } from "../../shared/bam-accounts";
 import { lamportsToSol } from "../../shared/amounts";
 import { pollReadOnly } from "../../shared/poll";
 
-import { access, mkdir, rename, rm, stat } from "node:fs/promises";
-import { constants } from "node:fs";
+import { access, mkdir, mkdtemp, rename, stat } from "node:fs/promises";
+import { constants, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { checkBamBoost, readFinalizedClaim } from "./check.ts";
@@ -56,6 +56,14 @@ async function run(
   return { stdout, stderr };
 }
 
+async function isCheckout(dir: string): Promise<boolean> {
+  try {
+    return (await stat(join(dir, ".git"))).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 async function ensureOfficialCli(requestedDir?: string): Promise<string> {
   const cliDir = requestedDir
     ? resolve(requestedDir)
@@ -66,20 +74,19 @@ async function ensureOfficialCli(requestedDir?: string): Promise<string> {
         "jito-bam-boost-cli",
         PINNED_COMMIT,
       );
-  let exists = false;
-  try {
-    exists = (await stat(join(cliDir, ".git"))).isDirectory();
-  } catch {
-    exists = false;
-  }
-  if (!exists) {
+  if (!(await isCheckout(cliDir))) {
     if (requestedDir) {
       throw new Error(`--cli-dir is not an existing git checkout: ${cliDir}`);
     }
     await mkdir(resolve(cliDir, ".."), { recursive: true });
-    // Clone and pin in a staging directory so an interrupted setup never leaves
-    // an unpinned checkout at the cache path.
-    const staging = `${cliDir}.staging-${process.pid}`;
+    // Clone and pin in a unique staging directory so an interrupted setup never
+    // leaves an unpinned checkout at the cache path or a directory that blocks a
+    // later run. An interrupt removes it as well.
+    const staging = await mkdtemp(`${cliDir}.staging-`);
+    const discard = () => rmSync(staging, { recursive: true, force: true });
+    const interrupted = () => { discard(); process.exit(130); };
+    process.once("SIGINT", interrupted);
+    process.once("SIGTERM", interrupted);
     try {
       await run(["git", "clone", "--filter=blob:none", OFFICIAL_REPO, staging], {
         stream: true,
@@ -88,9 +95,17 @@ async function ensureOfficialCli(requestedDir?: string): Promise<string> {
         cwd: staging,
         stream: true,
       });
-      await rename(staging, cliDir);
+      try {
+        await rename(staging, cliDir);
+      } catch (error) {
+        // A concurrent run may have installed the checkout first. It is verified
+        // below like any existing checkout; anything else is a real failure.
+        if (!(await isCheckout(cliDir))) throw error;
+      }
     } finally {
-      await rm(staging, { recursive: true, force: true });
+      process.off("SIGINT", interrupted);
+      process.off("SIGTERM", interrupted);
+      discard();
     }
   }
 
