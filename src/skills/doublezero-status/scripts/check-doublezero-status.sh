@@ -11,7 +11,7 @@ if [ "$#" -lt 1 ]; then
   exit 2
 fi
 
-LOCAL_TIME_ZONE="${LOCAL_TIME_ZONE:-Asia/Shanghai}"
+LOCAL_TIME_ZONE="${LOCAL_TIME_ZONE:-UTC}"
 
 if [ ! -e "/usr/share/zoneinfo/$LOCAL_TIME_ZONE" ]; then
   printf 'error: invalid LOCAL_TIME_ZONE: %s\n' "$LOCAL_TIME_ZONE" >&2

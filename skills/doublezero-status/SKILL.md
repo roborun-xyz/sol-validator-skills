@@ -1,11 +1,11 @@
 ---
 name: doublezero-status
-description: Quickly check DoubleZero Edge client status on Solana validator hosts. Use when Codex is asked to check DoubleZero, DZ, doublezerod, DoubleZero Edge, BGP tunnel status, edge-solana-shreds multicast, DoubleZero routes, DoubleZero latency, or recent DoubleZero logs on configured validator hosts.
+description: Quickly check DoubleZero Edge client status on Solana validator hosts. Use when asked to check DoubleZero, DZ, doublezerod, DoubleZero Edge, BGP tunnel status, edge-solana-shreds multicast, DoubleZero routes, DoubleZero latency, or recent DoubleZero logs on configured validator hosts.
 license: MIT
 compatibility: Requires Bash and SSH. Targets need Linux, systemd, iproute2, GNU timeout and DoubleZero.
 metadata:
   created: "2026-06-12"
-  last_updated: "2026-09-30"
+  last_updated: "2026-10-03"
 ---
 
 # DoubleZero Status
@@ -22,14 +22,14 @@ Prefer the bundled helper for normal checks:
 src/skills/doublezero-status/scripts/check-doublezero-status.sh <SSH_ALIAS>
 ```
 
-If no hosts are supplied, use the host aliases requested by the user. For vague requests like "check dz status", resolve active mainnet primaries from the operator's own verified inventory. If none is configured, ask for the target aliases before connecting. Read the default host inventory before asking for aliases. `fleet.json` covers SFDP production checks only and may omit backups; use it only when those explicitly selected instances are the intended targets. There are no built-in fleet defaults.
+Use the host aliases the user names. For a vague request like "check dz status", read the operator's host inventory first and resolve the active mainnet primaries from it. Ask for target aliases, before connecting, only when the inventory is missing or does not identify them. `fleet.json` covers SFDP production checks only and may omit backups; use it only when those explicitly selected instances are the intended targets. There are no built-in fleet defaults.
 
 ## Workflow
 
 1. Resolve aliases and roles from operator-owned inventory (read `VALIDATOR_OPS_HOST_INVENTORY` or `~/.config/validator-ops/hosts.md`; see `references/inventory-references-hosts.md`). Do not treat a bundled example or another operator's inventory as a target selection.
 2. Run the helper from the resolved bundle root with the target SSH aliases.
 3. Report:
-   - UTC and local check time. The helper defaults local time to `Asia/Shanghai`; override with `LOCAL_TIME_ZONE` when needed.
+   - UTC and local check time. The helper's local time defaults to UTC; override with `LOCAL_TIME_ZONE` when needed.
    - `doublezerod.service` active/substate, PID, restart count, and start timestamp.
    - `doublezero status` tunnel rows, especially `BGP Session Up`.
    - Edge signal: `P:edge-solana-shreds` present or missing.
