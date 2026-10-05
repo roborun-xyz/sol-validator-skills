@@ -2,6 +2,7 @@ import {readFile, lstat, mkdir, writeFile, chmod} from 'node:fs/promises';
 import {resolve, dirname, relative, sep} from 'node:path';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
+import {localIso} from '../src/skills/shared/time';
 
 export const root = resolve(import.meta.dir, '..');
 export function validatePaths(files: unknown): asserts files is string[] {
@@ -64,6 +65,9 @@ export async function inspect(source=root) {
 export async function exportRelease(output:string,source=root) {
  const {contents,modes}=await inspect(source);
  const destination=resolve(output);
+ // Resolve the timestamps first: an invalid LOCAL_TIME_ZONE must fail before anything is written.
+ const now=new Date();
+ const created={createdAtUtc:now.toISOString(),createdAtLocal:localIso(now)};
  // Refuse an existing destination; never merge a release into private data.
  await mkdir(destination,{recursive:false,mode:0o755});
  for (const [file,bytes] of contents) {
@@ -71,8 +75,7 @@ export async function exportRelease(output:string,source=root) {
   await mkdir(dirname(path),{recursive:true});
   await writeFile(path,bytes,{flag:'wx'}); await chmod(path,modes.get(file)!);
  }
- const now=new Date();
- const report={createdAtUtc:now.toISOString(),createdAtLocal:now.toLocaleString('sv-SE',{timeZone:process.env.LOCAL_TIME_ZONE?.trim()||'UTC',timeZoneName:'shortOffset'}),files:[...contents].map(([path,data])=>({path,sha256:createHash('sha256').update(data).digest('hex')}))};
+ const report={...created,files:[...contents].map(([path,data])=>({path,sha256:createHash('sha256').update(data).digest('hex')}))};
  await writeFile(resolve(destination,'release-manifest.json'),JSON.stringify(report,null,2)+'\n',{flag:'wx'});
  return report;
 }

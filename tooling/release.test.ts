@@ -24,6 +24,15 @@ test('export includes only allowlisted content, refuses existing output and syml
   expect(await Bun.file(join(output,'public.txt')).text()).toBe('public');
   expect(await Bun.file(join(output,'private.txt')).exists()).toBe(false);
   await expect(exportRelease(output,dir)).rejects.toThrow();
+  // An invalid zone fails before the destination exists, so a corrected rerun is not refused.
+  const zone=process.env.LOCAL_TIME_ZONE;const retry=join(dir,'retry');
+  try {
+   process.env.LOCAL_TIME_ZONE='Not/AZone';
+   await expect(exportRelease(retry,dir)).rejects.toThrow('Invalid LOCAL_TIME_ZONE');
+   expect(await Bun.file(join(retry,'public.txt')).exists()).toBe(false);
+   process.env.LOCAL_TIME_ZONE='America/Los_Angeles';
+   expect((await exportRelease(retry,dir)).createdAtLocal).toMatch(/T\d\d:\d\d:\d\d-0[78]:00$/);
+  } finally {if(zone===undefined) delete process.env.LOCAL_TIME_ZONE; else process.env.LOCAL_TIME_ZONE=zone;}
   await rm(join(dir,'public.txt'));await symlink(join(dir,'private.txt'),join(dir,'public.txt'));
   await expect(inspect(dir)).rejects.toThrow('Symlink');
  } finally {await rm(dir,{recursive:true,force:true});}
