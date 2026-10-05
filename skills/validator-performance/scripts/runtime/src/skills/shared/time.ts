@@ -1,6 +1,13 @@
-/** Zone for the "local" time in helper output: `LOCAL_TIME_ZONE` (an IANA name), otherwise UTC. */
+/**
+ * Zone for the "local" time in helper output: `LOCAL_TIME_ZONE` (an IANA name), otherwise UTC.
+ * An invalid name throws here, so a helper that calls this first fails before any network
+ * call or long-running step, not when it finally formats a timestamp.
+ */
 export function localTimeZone(env: Record<string, string | undefined> = process.env): string {
-  return env.LOCAL_TIME_ZONE?.trim() || 'UTC';
+  const zone = env.LOCAL_TIME_ZONE?.trim() || 'UTC';
+  try { new Intl.DateTimeFormat('en-CA', {timeZone: zone}); }
+  catch { throw new Error(`Invalid LOCAL_TIME_ZONE: ${zone}`); }
+  return zone;
 }
 
 /** ISO local time with an explicit offset, in the selected zone unless a caller passes one. */

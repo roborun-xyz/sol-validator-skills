@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 import {resolveOperator,rpcCall,redactRpc,type Input,type RpcCaller} from '../../shared/operator-config';
-import {localIso} from '../../shared/time';
+import {localIso,localTimeZone} from '../../shared/time';
 import {CONFIG,STATE,POOL,decodeConfig,decodeSnapshot,delegationSummary} from './accounts';
 
 export async function checkSteward(input:Input,includePool=false,call:RpcCaller=rpcCall) {
+  localTimeZone(); // Reject an invalid zone before any network call.
   const target=await resolveOperator(input,call);
   const initial=await call(target.rpcUrl,'getAccountInfo',[CONFIG,{encoding:'base64',commitment:'finalized'}]);
   const {validatorList}=decodeConfig(initial?.value);

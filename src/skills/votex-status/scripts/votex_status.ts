@@ -47,7 +47,9 @@ const asJson = switches.has("--json");
 const skipNames = switches.has("--no-names");
 const epochOnly = switches.has("--epoch-only");
 const maxPages = maxPagesRaw === undefined ? 20 : /^\d+$/.test(maxPagesRaw) ? Number(maxPagesRaw) : Number.NaN;
-const timeZone = localTimeZone();
+let timeZone: string;
+try { timeZone = localTimeZone(); } // Reject an invalid zone before any network call.
+catch (error) { console.error((error as Error).message); process.exit(2); }
 const rpcContext = createRpcContext();
 
 function isCurrentEpochArg(value: string | undefined): boolean {

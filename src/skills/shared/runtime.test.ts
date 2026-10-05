@@ -26,6 +26,8 @@ test('timestamp formatting preserves explicit offsets across midnight and daylig
  expect(localTimeZone({LOCAL_TIME_ZONE:' America/Los_Angeles '})).toBe('America/Los_Angeles');
  expect(localIso(new Date('2026-09-30T16:00:00Z'),localTimeZone({}))).toBe('2026-09-30T16:00:00+00:00');
  expect(()=>localIso(new Date(),'Not/AZone')).toThrow();
+ // An invalid selection is rejected when the zone is resolved, before anything is formatted.
+ expect(()=>localTimeZone({LOCAL_TIME_ZONE:'Not/AZone'})).toThrow('Invalid LOCAL_TIME_ZONE: Not/AZone');
  expect(localIso(new Date('2026-07-01T00:00:00Z'),'America/Los_Angeles')).toBe('2026-06-30T17:00:00-07:00');
  expect(localIso(new Date('2026-01-01T00:00:00Z'),'America/Los_Angeles')).toBe('2025-12-31T16:00:00-08:00');
  expect(localIso(new Date('2026-09-30T00:00:00Z'),'UTC')).toBe('2026-09-30T00:00:00+00:00');

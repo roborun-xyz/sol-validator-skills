@@ -133,6 +133,7 @@ async function main() {
   const selectedField = readArg("--field");
   const asJson = process.argv.includes("--json");
   if (!voteAccount) usage();
+  const localTimeZone = selectedTimeZone(); // Reject an invalid zone before any network call.
 
   const rpcUrl = (await resolveRpc(rpcOptions(process.argv.slice(2)))).rpcUrl;
 
@@ -197,7 +198,6 @@ async function main() {
     );
   }
   const now = new Date();
-  const localTimeZone = selectedTimeZone();
 
   const plan: Plan = {
     checkedAtUtc: now.toISOString(),

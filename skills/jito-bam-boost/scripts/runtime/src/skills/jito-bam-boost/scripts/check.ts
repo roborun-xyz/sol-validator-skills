@@ -2,7 +2,7 @@
 
 import { fetchResponse } from "../../shared/http";
 
-import { localIso } from "../../shared/time";
+import { localIso, localTimeZone } from "../../shared/time";
 
 import {
   rpcCall,
@@ -250,6 +250,7 @@ async function latestJitoSolRatio() {
 export async function checkBamBoost(
   options: CheckOptions,
 ): Promise<BamCheckResult> {
+  localTimeZone(); // Reject an invalid zone before any network call.
   const target = await resolveBamTarget(options);
   const identity = new PublicKey(target.identity);
   const [genesisHash, epochInfo, publishedEpochs] = await Promise.all([

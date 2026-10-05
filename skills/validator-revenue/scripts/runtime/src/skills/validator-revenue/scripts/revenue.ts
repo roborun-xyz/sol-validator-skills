@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { localIso } from "../../shared/time";
+import { localIso, localTimeZone } from "../../shared/time";
 
 import { fetchSvtHistory, unavailableEpochsNote, leaderSkipRatePct } from "../../shared/epoch-history";
 import { lamportsToSol, LAMPORTS_PER_SOL } from "../../shared/amounts";
@@ -1170,6 +1170,7 @@ export function renderCsv(rows: RevenueRow[], includeMarinadeBond: boolean): str
 
 async function main() {
   const opts = parseEpochQueryArgs(Bun.argv.slice(2), usage);
+  localTimeZone(); // Reject an invalid zone before any network call.
   const operator = await resolveOperator(opts);
   opts.rpcUrl = operator.rpcUrl;
   opts.voteAccount = operator.voteAccount;

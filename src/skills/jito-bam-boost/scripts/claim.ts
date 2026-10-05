@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { localIso } from "../../shared/time";
+import { localIso, localTimeZone } from "../../shared/time";
 
 import { createRpcContext, rpcOptions } from "../../shared/operator-config.ts";
 import { BAM_BOOST_PROGRAM } from "../../shared/bam-accounts";
@@ -196,6 +196,7 @@ function extractSignature(output: string): string | null {
 
 try {
   const options = parseOptions();
+  localTimeZone(); // Reject an invalid zone before the CLI build and any submission.
   const rpcUrl = await rpcContext.url(); // Fail before reading signers or building the external CLI.
   const checkOptions = {
     ...rpcOptions(process.argv.slice(2)),
