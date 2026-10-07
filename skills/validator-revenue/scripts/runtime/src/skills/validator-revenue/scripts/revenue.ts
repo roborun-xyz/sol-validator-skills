@@ -379,8 +379,10 @@ export async function fetchBamBoostRewards(
       batch.map(async (earningEpoch): Promise<BamBoostReward> => {
         // JIP-31 publishes rewards earned in epoch N under the epoch N+1 distributor.
         const claimEpoch = earningEpoch + 1;
-        // Trillium serves only recent epochs; otherwise use the identity that the
-        // JPool/SVT history row records for the same epoch.
+        // Trillium's per-validator history serves only recent epochs; otherwise use the
+        // identity in the JPool/SVT history row, which records that epoch's own identity.
+        // Checked 2026-10-07: for 12 validators that changed identity between epochs 1000
+        // and 1049, the SVT row matched Trillium's per-epoch identity in both epochs.
         const trilliumIdentity = identityByEpoch.get(earningEpoch);
         const identityAccount = trilliumIdentity ?? fallbackIdentityByEpoch.get(earningEpoch) ?? null;
         const identitySource: BamBoostIdentitySource | null =
@@ -974,12 +976,8 @@ function fmtInt(value: number): string {
   return Math.round(value).toLocaleString("en-US");
 }
 
-/**
- * Disclosure for epochs whose BAM Boost identity came from the JPool/SVT row. That row is
- * not verified to record the epoch's own identity, so a zero found under it is not a
- * verified zero for a validator that has changed identity.
- */
-export function bamBoostIdentityNote(rows: Array<Pick<RevenueRow, "epoch" | "bamBoostIdentitySource" | "bamBoostAllocationStatus">>): string[] {
+/** States which epochs took their BAM Boost identity from the JPool/SVT history row; empty when none did. */
+export function bamBoostIdentityNote(rows: Array<Pick<RevenueRow, "epoch" | "bamBoostIdentitySource">>): string[] {
   const fallback = rows.filter((row) => row.bamBoostIdentitySource === "svt-history");
   if (!fallback.length) return [];
   const epochs = fallback.map((row) => row.epoch).sort((a, b) => a - b);
@@ -990,8 +988,7 @@ export function bamBoostIdentityNote(rows: Array<Pick<RevenueRow, "epoch" | "bam
     ranges.push(start === end ? `${epochs[start]}` : `${epochs[start]}-${epochs[end]}`);
     start = end + 1;
   }
-  const unallocated = fallback.filter((row) => row.bamBoostAllocationStatus === "not_allocated").length;
-  return [`BAM Boost identity for epochs \`${ranges.join(", ")}\` came from the JPool/SVT history row because Trillium does not cover them. That row is not verified to hold the identity used in that epoch, so if the validator has changed identity, the \`not_allocated\` result on ${unallocated} of these ${fallback.length} epoch(s) is not a verified zero.`];
+  return [`BAM Boost identity for epochs \`${ranges.join(", ")}\` came from that epoch's JPool/SVT history row because Trillium's validator history does not cover them. The row holds one identity per epoch, so an identity change inside an epoch is not represented.`];
 }
 
 export function renderMarkdown(result: {

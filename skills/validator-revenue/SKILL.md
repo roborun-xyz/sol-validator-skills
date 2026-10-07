@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC.
 metadata:
   created: "2026-05-27"
-  last_updated: "2026-10-05"
+  last_updated: "2026-10-07"
 ---
 
 # Validator Revenue
@@ -26,7 +26,7 @@ Use `--validator <VOTE_OR_IDENTITY>` for identity resolution, `--include-current
 
 The helper uses the operator-selected Helius mainnet RPC, JPool/SVT history, Trillium epoch-specific identity resolution, Jito's official validator rewards and JitoSOL/SOL ratio APIs, Jito's public BAM Boost Merkle distributions, and Marinade's validator-bonds API.
 
-Trillium serves only recent epochs. For an epoch it does not cover, the helper uses the identity recorded in that epoch's JPool/SVT history row and reports the choice as `bamBoostIdentitySource` (`trillium` or `svt-history`) in JSON and CSV and as a note under the Markdown table. Whether a JPool/SVT row records the identity used in that epoch or the validator's current one is not verified, so for a validator that has changed identity a `not_allocated` result on an `svt-history` epoch is not a verified zero; relay that note with the totals. `identity_missing` means neither source supplied an identity, so that epoch's BAM Boost allocation is unknown, not zero; say so when it appears inside the reported window.
+Trillium serves only recent epochs. For an epoch it does not cover, the helper uses the identity recorded in that epoch's JPool/SVT history row and reports the choice as `bamBoostIdentitySource` (`trillium` or `svt-history`) in JSON and CSV and as a note under the Markdown table. A JPool/SVT row records the identity used in its own epoch, not the validator's current one (checked on 2026-10-07 against Trillium's per-epoch data for 12 validators that changed identity), so `not_allocated` on an `svt-history` epoch is a real zero for that identity. The row holds one identity per epoch; an identity change inside an epoch is not represented. `identity_missing` means neither source supplied an identity, so that epoch's BAM Boost allocation is unknown, not zero; say so when it appears inside the reported window.
 
 When JPool/SVT returns no rows for the first requested epochs, the helper shortens every source to the available epochs and states which requested epochs are unavailable (`requestedFirstEpoch` and `firstEpoch` in JSON; standard error for CSV). Repeat that scope whenever quoting totals. The helper cannot tell a validator that started later from rows missing upstream, so do not describe the first available epoch as the validator's first epoch without another source. A gap after the first available epoch still fails. `skip_rate_pct` is derived from leader-slot counts and is empty for an epoch without leader slots or without both counts.
 

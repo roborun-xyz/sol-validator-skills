@@ -177,15 +177,14 @@ describe("BAM Boost identity resolution", () => {
     expect((await rewards()).get(100)).toMatchObject({ status: "identity_missing", amount: 0n, identityAccount: null, identitySource: null });
   });
 
-  test("Markdown discloses epochs resolved through the history row and their unverified zeros", () => {
+  test("Markdown states which epochs were resolved through the history row", () => {
     const row = (epoch: number, source: "trillium" | "svt-history", status: "allocated" | "not_allocated") =>
       ({ ...totals([]), epoch, bamBoostIdentitySource: source, bamBoostAllocationStatus: status });
     const rows = [row(97, "svt-history", "not_allocated"), row(98, "svt-history", "allocated"), row(99, "trillium", "not_allocated"), row(100, "svt-history", "not_allocated")];
-    expect(bamBoostIdentityNote(rows)).toEqual([expect.stringContaining("epochs `97-98, 100` came from the JPool/SVT history row")]);
-    expect(bamBoostIdentityNote(rows)[0]).toContain("on 2 of these 3 epoch(s) is not a verified zero");
+    expect(bamBoostIdentityNote(rows)).toEqual([expect.stringContaining("epochs `97-98, 100` came from that epoch's JPool/SVT history row")]);
     expect(bamBoostIdentityNote([row(99, "trillium", "not_allocated")])).toEqual([]);
     const md = renderMarkdown({ voteAccount: TEST_VOTE, currentEpoch: 101, firstEpoch: 97, lastEpoch: 100, rows, hasMarinadeBond: false, marinadeBondAccounts: [] });
-    expect(md).toContain("came from the JPool/SVT history row");
+    expect(md).toContain("JPool/SVT history row because Trillium's validator history does not cover them");
   });
 
   test("CSV keeps header and row aligned with the identity source column", () => {
