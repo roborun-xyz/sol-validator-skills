@@ -138,7 +138,7 @@ function tvcPctOfMax(row: SvtHistoryRow): number | null {
 }
 
 // An in-progress epoch cannot be compared with a full epoch's maximum credits, and upstream
-// publishes zero credits and leader slots for it as placeholders, not measurements.
+// publishes zero credits, leader slots and MEV commission for it as placeholders, not measurements.
 export function normalizePerformanceRow(row: SvtHistoryRow, inProgress = false): PerfRow {
   const placeholder = (count: number | null) => (inProgress && count === 0 ? null : count);
   const leaderSlots = placeholder(toCount(row.leaderSlotsTotal));
@@ -146,7 +146,7 @@ export function normalizePerformanceRow(row: SvtHistoryRow, inProgress = false):
   const blockProductionPct =
     leaderSlots !== null && blocksProduced !== null && leaderSlots > 0 && blocksProduced <= leaderSlots
       ? (blocksProduced / leaderSlots) * 100 : null;
-  const mevCommission = toNumber(row.mevCommission);
+  const mevCommission = placeholder(toNumber(row.mevCommission));
   const tvcRank = toCount(row.tvcRank);
   return {
     epoch: row.epoch,

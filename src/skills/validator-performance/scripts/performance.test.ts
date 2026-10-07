@@ -38,12 +38,15 @@ test("an in-progress epoch is marked and excluded from the window summary", () =
   const completed = normalizePerformanceRow({ ...source, epoch: 98, tvCredits: 6_912_000, tvcRank: 5, leaderSlotsTotal: 10, leaderSlotsDone: 10, fee: 5, mevCommission: 1000 });
   const partial = normalizePerformanceRow({ ...source, tvCredits: 0, tvcRank: 0, leaderSlotsTotal: 0, leaderSlotsDone: 0, fee: 5, mevCommission: 0, skippedSlots: 1 }, true);
   // Upstream's zero credits and leader slots for the in-progress epoch are placeholders.
-  expect(partial).toMatchObject({ inProgress: true, voteCredits: null, leaderSlots: null, blocksProduced: null, tvcPctOfMax: null, tvcRank: null, skipRatePct: null });
+  expect(partial).toMatchObject({ inProgress: true, voteCredits: null, leaderSlots: null, blocksProduced: null, tvcPctOfMax: null, tvcRank: null, skipRatePct: null, mevCommissionPct: null, commissionPct: 5 });
+  // A zero MEV commission in a completed epoch is a real value.
+  expect(normalizePerformanceRow({ ...source, mevCommission: 0 }).mevCommissionPct).toBe(0);
   expect(normalizePerformanceRow({ ...source, tvCredits: 1_000, leaderSlotsTotal: 4, leaderSlotsDone: 4 }, true)).toMatchObject({ voteCredits: 1_000, leaderSlots: 4, blocksProduced: 4 });
   const csv = renderCsv([completed, partial]).split("\n").map((line) => line.split(","));
   expect(csv[0].at(-1)).toBe("in_progress");
   expect([csv[1].at(-1), csv[2].at(-1)]).toEqual(["false", "true"]);
   expect(csv[2].slice(2, 7)).toEqual(["", "", "", "", ""]);
+  expect(csv[2].slice(9, 11)).toEqual(["5", ""]);
   const output = renderMarkdown({
     voteAccount: "fixture-vote", currentEpoch: 99, currentSlotIndex: 1, slotsInEpoch: 432_000,
     requestedFirstEpoch: 97, firstEpoch: 98, lastEpoch: 99, inProgressEpoch: 99, rows: [completed, partial],

@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC.
 metadata:
   created: "2026-05-28"
-  last_updated: "2026-10-05"
+  last_updated: "2026-10-07"
 ---
 
 # Validator Performance
@@ -28,7 +28,7 @@ Report current state, completed epoch range, per-epoch metrics, totals/averages,
 
 When JPool/SVT returns no rows for the first requested epochs, the helper shortens the window to the available epochs and states which requested epochs are unavailable (`requestedFirstEpoch` and `firstEpoch` in JSON; standard error for CSV). Repeat that scope whenever quoting totals. The helper cannot tell a validator that started later from rows missing upstream, so do not describe the first available epoch as the validator's first epoch without another source. A gap after the first available epoch, or a missing latest epoch, still fails rather than producing a partial window.
 
-With `--include-current`, the in-progress epoch is listed and marked, but upstream publishes partial or placeholder values for it, so it is excluded from window totals and averages. It is marked in every format: `inProgressEpoch` and a per-row `inProgress` in JSON, and an `in_progress` column in CSV. Its zero vote credits and leader slots are upstream placeholders and are reported as unavailable, not as zero. Do not read its row as a completed result. A window with no completed epoch has no totals.
+With `--include-current`, the in-progress epoch is listed and marked, but upstream publishes partial or placeholder values for it, so it is excluded from window totals and averages. It is marked in every format: `inProgressEpoch` and a per-row `inProgress` in JSON, and an `in_progress` column in CSV. Its zero vote credits, leader slots and MEV commission are upstream placeholders and are reported as unavailable, not as zero. Do not read its row as a completed result. A window with no completed epoch has no totals.
 
 Skip rate and block production come only from leader-slot counts and are unavailable for an epoch without leader slots. JPool/SVT's `skippedSlots` field is the vote-credit shortfall, not a block skip rate, and is never used as one.
 
