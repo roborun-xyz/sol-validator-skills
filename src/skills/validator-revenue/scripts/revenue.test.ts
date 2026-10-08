@@ -195,3 +195,37 @@ describe("BAM Boost identity resolution", () => {
     expect(csv[1]?.[csv[0]!.indexOf("skip_rate_pct")]).toBe("2.5000");
   });
 });
+
+describe("Markdown layout", () => {
+  const columns = (line: string) => line.split("|").length - 2;
+
+  test("the main table stays narrow and the rate timestamps move to the detail table", () => {
+    const row = {
+      ...totals([]), epoch: 100, jitoCommissionBps: 800, bamBoostClaimEpoch: 101,
+      bamBoostJitoSolToSolRate: 1.304624952, bamBoostRateTimestampUtc: "2026-10-04T23:07:59Z", bamBoostRateTimestampLocal: "2026-10-04T16:07:59-07:00",
+      bamBoostAllocationStatus: "allocated" as const, bamBoostClaimStatus: "claimed" as const,
+    };
+    const md = renderMarkdown({ voteAccount: TEST_VOTE, currentEpoch: 101, firstEpoch: 100, lastEpoch: 100, rows: [row], hasMarinadeBond: false, marinadeBondAccounts: [] });
+    const tables = md.split("\n").filter(line => line.startsWith("| Epoch"));
+    expect(tables).toHaveLength(2);
+    expect(columns(tables[0]!)).toBe(11);
+    expect(tables[0]).not.toContain("JitoSOL/SOL");
+    expect(tables[1]).toContain("Rate Time (UTC)");
+    const [mainRow, detailRow] = md.split("\n").filter(line => line.startsWith("| 100 |"));
+    expect(detailRow).toBeDefined();
+    expect(columns(mainRow!)).toBe(11);
+    expect(mainRow).not.toContain("2026-10-04");
+    expect(detailRow).toContain("| 800 |");
+    expect(detailRow).toContain("| 1.304624952 | 2026-10-04T23:07:59Z | 2026-10-04T16:07:59-07:00 |");
+    expect(detailRow).toContain("allocated/claimed");
+  });
+
+  test("a Marinade bond adds exactly one column to the main table", () => {
+    const row = { ...totals([]), epoch: 100, marinadeBondPaymentSol: 2, marinadeBondPaymentStatus: "paid" as const };
+    const md = renderMarkdown({ voteAccount: TEST_VOTE, currentEpoch: 101, firstEpoch: 100, lastEpoch: 100, rows: [row], hasMarinadeBond: true, marinadeBondAccounts: [] });
+    const [header, , body] = md.split("\n").filter(line => line.startsWith("| Epoch") || line.startsWith("|---") || line.startsWith("| 100 |"));
+    expect(columns(header!)).toBe(12);
+    expect(columns(body!)).toBe(12);
+    expect(body).toContain("2.000000 (paid)");
+  });
+});

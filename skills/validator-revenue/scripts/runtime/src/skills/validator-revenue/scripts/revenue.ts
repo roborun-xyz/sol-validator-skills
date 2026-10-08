@@ -1013,12 +1013,13 @@ export function renderMarkdown(result: {
   const revenueDefinition = result.hasMarinadeBond
     ? "SOL revenue definition used: gross = votingReward + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - votingFee - reported Marinade bond payment - estimated Marinade payment. Reported payments sum ValidatorBond-funded protected-events. When an epoch has no published ValidatorBond-funded Bidding events globally, bidding-bond costs are estimated from that epoch's SAM effectiveBid × marinadeActivatedStakeSol / 1000. Estimates use auction snapshots, exclude additional penalties/PSR and can differ from final settlement. no_record means no matching published payment, not verified zero liability; global publication can be partial. This excludes other off-chain payments, infrastructure costs, and other operating costs."
     : "SOL revenue definition used: gross = votingReward + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - votingFee. No Marinade validator bond was found, so bond payments are not included. This excludes off-chain payments, infrastructure costs, and other operating costs.";
-  const tableHeader = result.hasMarinadeBond
-    ? "| Epoch | Stake SOL | Voting Reward | Commission | Jito Commission | Excluded SVT Jito Inflow | BAM Allocated JitoSOL | JitoSOL/SOL | BAM Allocated SOL Eq. | BAM Claimed SOL Eq. | BAM Status | Voting Comp | Gross SOL | Voting Fee | Marinade Bond Payment | Net SOL | Pre-Comp Lamports / 1k Stake | Blocks |"
-    : "| Epoch | Stake SOL | Voting Reward | Commission | Jito Commission | Excluded SVT Jito Inflow | BAM Allocated JitoSOL | JitoSOL/SOL | BAM Allocated SOL Eq. | BAM Claimed SOL Eq. | BAM Status | Voting Comp | Gross SOL | Voting Fee | Net SOL | Pre-Comp Lamports / 1k Stake | Blocks |";
-  const tableDivider = result.hasMarinadeBond
-    ? "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---|---:|---:|---:|---:|---:|---:|---:|"
-    : "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---|---:|---:|---:|---:|---:|---:|";
+  const bondHeader = result.hasMarinadeBond ? " Marinade Bond Payment |" : "";
+  const bondDivider = result.hasMarinadeBond ? "---:|" : "";
+  const tableHeader = `| Epoch | Stake SOL | Voting Reward | Commission | Jito Commission | BAM Boost SOL Eq. | Voting Comp | Gross SOL | Voting Fee |${bondHeader} Net SOL | Blocks |`;
+  const tableDivider = `|---:|---:|---:|---:|---:|---:|---:|---:|---:|${bondDivider}---:|---:|`;
+  const detailHeader =
+    "| Epoch | Jito Commission bps | Excluded SVT Jito Inflow | BAM Claim Epoch | BAM Allocated JitoSOL | JitoSOL/SOL | Rate Time (UTC) | Rate Time (local) | BAM Claimed SOL Eq. | BAM Status | Pre-Comp Lamports / 1k Stake |";
+  const detailDivider = "|---:|---:|---:|---:|---:|---:|:---|:---|---:|:---|---:|";
   const lines = [
     `As of current epoch \`${result.currentEpoch}\`, ${epochCoverage}.`,
     "",
@@ -1032,25 +1033,33 @@ export function renderMarkdown(result: {
     tableHeader,
     tableDivider,
   ];
+  const detailLines: string[] = [];
 
   for (const row of result.rows) {
     const bondCell = result.hasMarinadeBond
       ? row.marinadeBondPaymentStatus === "estimated"
-        ? ` | ${fmtSol(row.marinadeBondPaymentSol)} reported + ${fmtSol(row.marinadeBondEstimatedPaymentSol)} estimated`
-        : ` | ${fmtSol(row.marinadeBondPaymentSol)} (${row.marinadeBondPaymentStatus})`
+        ? ` ${fmtSol(row.marinadeBondPaymentSol)} reported + ${fmtSol(row.marinadeBondEstimatedPaymentSol)} estimated |`
+        : ` ${fmtSol(row.marinadeBondPaymentSol)} (${row.marinadeBondPaymentStatus}) |`
       : "";
     const jitoCommission =
-      row.jitoCommissionBps === null
-        ? `${fmtSol(row.jitoRewardSol)} (${row.jitoRewardStatus})`
-        : `${fmtSol(row.jitoRewardSol)} (${row.jitoCommissionBps} bps)`;
-    const bamRate =
-      row.bamBoostJitoSolToSolRate === null
-        ? "-"
-        : `${row.bamBoostJitoSolToSolRate.toFixed(9)} @ ${row.bamBoostRateTimestampUtc} UTC / ${row.bamBoostRateTimestampLocal} local`;
+      row.jitoCommissionBps === null ? `${fmtSol(row.jitoRewardSol)} (${row.jitoRewardStatus})` : fmtSol(row.jitoRewardSol);
     lines.push(
-      `| ${row.epoch} | ${fmtInt(row.stakeSol)} | ${fmtSol(row.votingRewardSol)} | ${fmtSol(row.commissionRewardSol)} | ${jitoCommission} | ${fmtSol(row.excludedSvtJitoInflowSol)} | ${fmtSol(row.bamBoostAllocatedJitoSol)} | ${bamRate} | ${fmtSol(row.bamBoostAllocatedSolEquivalent)} | ${fmtSol(row.bamBoostClaimedSolEquivalent)} | ${row.bamBoostClaimEpoch} ${row.bamBoostAllocationStatus}/${row.bamBoostClaimStatus} | ${fmtSol(row.votingCompensationSol)} | ${fmtSol(row.grossRevenueSol)} | ${fmtSol(row.votingFeeSol)}${bondCell} | ${fmtSol(row.netRevenueSol)} | ${fmtInt(row.preCompLamportsPerKiloStake)} | ${row.blocksProduced}/${row.leaderSlots} |`,
+      `| ${row.epoch} | ${fmtInt(row.stakeSol)} | ${fmtSol(row.votingRewardSol)} | ${fmtSol(row.commissionRewardSol)} | ${jitoCommission} | ${fmtSol(row.bamBoostAllocatedSolEquivalent)} | ${fmtSol(row.votingCompensationSol)} | ${fmtSol(row.grossRevenueSol)} | ${fmtSol(row.votingFeeSol)} |${bondCell} ${fmtSol(row.netRevenueSol)} | ${row.blocksProduced}/${row.leaderSlots} |`,
+    );
+    const bamRate = row.bamBoostJitoSolToSolRate === null ? "-" : row.bamBoostJitoSolToSolRate.toFixed(9);
+    detailLines.push(
+      `| ${row.epoch} | ${row.jitoCommissionBps ?? row.jitoRewardStatus} | ${fmtSol(row.excludedSvtJitoInflowSol)} | ${row.bamBoostClaimEpoch} | ${fmtSol(row.bamBoostAllocatedJitoSol)} | ${bamRate} | ${row.bamBoostRateTimestampUtc || "-"} | ${row.bamBoostRateTimestampLocal || "-"} | ${fmtSol(row.bamBoostClaimedSolEquivalent)} | ${row.bamBoostAllocationStatus}/${row.bamBoostClaimStatus} | ${fmtInt(row.preCompLamportsPerKiloStake)} |`,
     );
   }
+
+  lines.push(
+    "",
+    "Per-epoch detail for reconciliation. BAM Boost SOL equivalents use the JitoSOL/SOL rate shown here; the main table's BAM Boost column is the allocated SOL equivalent.",
+    "",
+    detailHeader,
+    detailDivider,
+    ...detailLines,
+  );
 
   lines.push(...bamBoostIdentityNote(result.rows).flatMap((note) => ["", note]));
 
