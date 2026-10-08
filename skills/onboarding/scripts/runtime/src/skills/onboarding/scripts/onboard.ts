@@ -50,7 +50,7 @@ export async function main(args: string[]) {
   const live=await verifyValidator(selected.target,selected.rpcUrl);
   const checkedAt=new Date().toISOString();
   const checkedAtLocal=localIso(new Date(checkedAt),localTimeZone);
-  Object.defineProperty(config.profiles,name,{value:{cluster:'mainnet-beta',...live,rpcUrl:selected.rpcUrl,verification:{source:'helius-rpc',checkedAt}},enumerable:true,writable:true,configurable:true});
+  Object.defineProperty(config.profiles,name,{value:{cluster:'mainnet-beta',...live,rpcUrl:selected.rpcUrl,verification:{source:'rpc',checkedAt}},enumerable:true,writable:true,configurable:true});
   if(makeDefault) config.defaultProfile=name;
   await saveConfig(config,path);
   console.log(JSON.stringify({status:'verified',profile:name,...live,checkedAt,checkedAtLocal,localTimeZone,configPath:configPath(path)},null,2));

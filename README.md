@@ -23,7 +23,7 @@ bunx --bun skills@1.7.0 add roborun-xyz/sol-validator-skills \
 
 Then tell your agent: *"Use onboarding to set up my validator, then give me a 30-epoch performance review."*
 
-Requirements are Bun 1.3.3 and a Helius mainnet RPC URL for chain queries. SSH, Solana CLI, Rust and Python are needed only by the workflows that use them; each `SKILL.md` says which. `npx skills@1.7.0 add ...` works the same way. Any other Agent Skills client can copy a [`skills/<name>`](skills/README.md) directory: each one carries its own runtime, dependency lock and license.
+Requirements are Bun 1.3.3 and a mainnet RPC URL for chain queries: any http or https endpoint works, and Helius is the tested default. SSH, Solana CLI, Rust and Python are needed only by the workflows that use them; each `SKILL.md` says which. `npx skills@1.7.0 add ...` works the same way. Any other Agent Skills client can copy a [`skills/<name>`](skills/README.md) directory: each one carries its own runtime, dependency lock and license.
 
 ## What a check looks like
 
@@ -80,7 +80,7 @@ Requirements are Bun 1.3.3 and a Helius mainnet RPC URL for chain queries. SSH, 
 
 | Source | Used for |
 |---|---|
-| Your Helius mainnet RPC | Current epoch, vote accounts, finalized account state, transaction scans |
+| Your mainnet RPC (any endpoint; Helius tested) | Current epoch, vote accounts, finalized account state, transaction scans |
 | [SVT](https://svt.one) validator history | Per-epoch credits, rank, rewards, stake and leader slots |
 | [Trillium](https://trillium.so) | Epoch-specific identity for BAM Boost attribution |
 | Jito kobe API and BAM Boost bucket | Official validator MEV rewards, JitoSOL/SOL ratio, Merkle allocations |

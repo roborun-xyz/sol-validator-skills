@@ -2,10 +2,10 @@
 name: jito-bam-boost
 description: Check and claim Jito BAM Boost JitoSOL rewards for a Solana mainnet validator identity. Use when an operator asks what BAM Boost is claimable, whether a BAM allocation was claimed, or explicitly asks to claim an exact BAM reward; do not use for ordinary Jito MEV rewards.
 license: MIT
-compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC. Approved claims also require Git, Cargo, Solana CLI and an operator-owned local signer.
+compatibility: Requires Bun 1.3.3, internet access and a mainnet RPC URL. Approved claims also require Git, Cargo, Solana CLI and an operator-owned local signer.
 metadata:
   created: "2026-08-29"
-  last_updated: "2026-10-05"
+  last_updated: "2026-10-08"
 ---
 
 # Jito BAM Boost
@@ -39,7 +39,7 @@ bun src/skills/jito-bam-boost/scripts/check.ts \
   --format markdown
 ```
 
-The checker obtains the published mainnet claim epochs from Jito's public GCS bucket, reads each Merkle allocation, derives the official distributor and Claim Status PDAs, and checks finalized state through the operator-selected Helius RPC. A positive allocation is claimable only when all of these are true:
+The checker obtains the published mainnet claim epochs from Jito's public GCS bucket, reads each Merkle allocation, derives the official distributor and Claim Status PDAs, and checks finalized state through the operator-selected mainnet RPC. A positive allocation is claimable only when all of these are true:
 
 - no Claim Status account exists;
 - the distributor account exists;
@@ -78,7 +78,7 @@ bun src/skills/jito-bam-boost/scripts/claim.ts \
   --execute
 ```
 
-Do not use the pinned CLI's `--print-tx` flag as a simulation path: that version still submits the transaction. Do not use `--skip-preflight`, SSH, a remote keypair, a different BAM program, or a non-Helius mainnet RPC.
+Do not use the pinned CLI's `--print-tx` flag as a simulation path: that version still submits the transaction. Do not use `--skip-preflight`, SSH, a remote keypair, a different BAM program, or an RPC endpoint other than the one the read-only check used.
 
 For multiple approved epochs, run them in ascending order and stop after the first failure or ambiguous result. Do not retry until the transaction signature and finalized Claim Status have been resolved.
 

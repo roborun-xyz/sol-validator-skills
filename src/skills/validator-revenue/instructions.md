@@ -2,10 +2,10 @@
 name: validator-revenue
 description: Fetch Solana validator historical gross and net revenue by epoch, including voting rewards, commission rewards, Jito rewards, BAM Boost JitoSOL subsidies, voting compensation, voting fees, and Marinade bond payments when present. Use for revenue history and per-epoch income; default to the last 30 completed mainnet epochs.
 license: MIT
-compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC.
+compatibility: Requires Bun 1.3.3, internet access and a mainnet RPC URL.
 metadata:
   created: "2026-05-27"
-  last_updated: "2026-10-07"
+  last_updated: "2026-10-08"
 ---
 
 # Validator Revenue
@@ -24,7 +24,7 @@ bun src/skills/validator-revenue/scripts/revenue.ts \
 
 Use `--validator <VOTE_OR_IDENTITY>` for identity resolution, `--include-current` only when requested, and `--format markdown|csv|json` for output.
 
-The helper uses the operator-selected Helius mainnet RPC, JPool/SVT history, Trillium epoch-specific identity resolution, Jito's official validator rewards and JitoSOL/SOL ratio APIs, Jito's public BAM Boost Merkle distributions, and Marinade's validator-bonds API.
+The helper uses the operator-selected mainnet RPC, JPool/SVT history, Trillium epoch-specific identity resolution, Jito's official validator rewards and JitoSOL/SOL ratio APIs, Jito's public BAM Boost Merkle distributions, and Marinade's validator-bonds API.
 
 Trillium serves only recent epochs. For an epoch it does not cover, the helper uses the identity recorded in that epoch's JPool/SVT history row and reports the choice as `bamBoostIdentitySource` (`trillium` or `svt-history`) in JSON and CSV and as a note under the Markdown table. A JPool/SVT row records the identity used in its own epoch, not the validator's current one (checked on 2026-10-07 against Trillium's per-epoch data for 12 validators that changed identity), so `not_allocated` on an `svt-history` epoch is a real zero for that identity. The row holds one identity per epoch; an identity change inside an epoch is not represented. `identity_missing` means neither source supplied an identity, so that epoch's BAM Boost allocation is unknown, not zero; say so when it appears inside the reported window.
 
@@ -36,7 +36,7 @@ Keep `marinadeBondPaymentSol` as published payments and report `marinadeBondEsti
 
 Calculate validator-operator Jito MEV revenue from Jito's official validator rewards as `floor(mev_revenue * mev_commission_bps / 10_000)`. Do not use JPool/SVT's raw `jitoReward` as revenue because that inflow can include returned Tip Distribution Account rent. Report the raw SVT inflow and excluded difference for reconciliation, but exclude the difference from gross and net revenue.
 
-BAM Boost accounting follows JIP-31's epoch-lagged distribution: a subsidy earned in epoch `N` is read from claim distributor epoch `N+1`. Treat presence in Jito's Merkle tree as an allocation, not proof of receipt. Derive the official distributor and Claim Status PDAs and check them at finalized commitment through the operator-selected Helius RPC. Mark an allocation `claimed` only when the Claim Status account exists and its owner, discriminator, claimant, and amount match; an absent Claim Status marks a positive published allocation `unclaimed`, while malformed or mismatched Claim Status data fails verification. Report allocated and claimed amounts separately in raw JitoSOL and historical SOL equivalent.
+BAM Boost accounting follows JIP-31's epoch-lagged distribution: a subsidy earned in epoch `N` is read from claim distributor epoch `N+1`. Treat presence in Jito's Merkle tree as an allocation, not proof of receipt. Derive the official distributor and Claim Status PDAs and check them at finalized commitment through the operator-selected mainnet RPC. Mark an allocation `claimed` only when the Claim Status account exists and its owner, discriminator, claimant, and amount match; an absent Claim Status marks a positive published allocation `unclaimed`, while malformed or mismatched Claim Status data fails verification. Report allocated and claimed amounts separately in raw JitoSOL and historical SOL equivalent.
 
 Convert allocated JitoSOL to SOL with Jito's latest official daily JitoSOL/SOL ratio at or before the first confirmed block of claim epoch `N+1`, retain the raw JitoSOL amount and rate timestamp in both UTC and local time for auditability, and include the allocated SOL amount in gross and net revenue. Use that same historical rate for the claimed SOL equivalent so allocated and claimed values are comparable; claiming is a receipt-state change and must not add the reward to revenue a second time. Never assume 1 JitoSOL equals 1 SOL.
 

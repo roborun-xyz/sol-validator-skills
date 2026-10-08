@@ -2,10 +2,10 @@
 name: validator-performance
 description: Fetch Solana validator consensus performance by epoch, including vote credits and percent of max, rank, skip rate, block production, stake, commission, MEV commission, and current delinquency. Use for validator performance reviews; default to the last 30 completed mainnet epochs.
 license: MIT
-compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC.
+compatibility: Requires Bun 1.3.3, internet access and a mainnet RPC URL.
 metadata:
   created: "2026-05-28"
-  last_updated: "2026-10-07"
+  last_updated: "2026-10-08"
 ---
 
 # Validator Performance
@@ -20,9 +20,9 @@ bun src/skills/validator-performance/scripts/performance.ts \
   --epochs 30
 ```
 
-Use `--validator <VOTE_OR_IDENTITY>` to resolve a current identity through Helius. Add `--include-current` only when in-progress data is requested. Output formats: `markdown`, `csv`, or `json`.
+Use `--validator <VOTE_OR_IDENTITY>` to resolve a current identity through the configured RPC. Add `--include-current` only when in-progress data is requested. Output formats: `markdown`, `csv`, or `json`.
 
-The helper uses the operator-selected Helius mainnet RPC for current epoch/vote state and JPool/SVT for historical epoch metrics. Apply the shared RPC selection policy in the runtime reference. No credential is bundled.
+The helper uses the operator-selected mainnet RPC for current epoch/vote state and JPool/SVT for historical epoch metrics. Apply the shared RPC selection policy in the runtime reference. No credential is bundled.
 
 Report current state, completed epoch range, per-epoch metrics, totals/averages, and any unavailable epochs. Use `validator-revenue` when the question is about SOL earned.
 

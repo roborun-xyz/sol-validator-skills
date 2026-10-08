@@ -2,10 +2,10 @@
 name: jitosol-steward
 description: Check current JitoSOL Steward validator ranking, algorithmic delegation fraction, active/transient stake, instant unstake and scoring cycle on Solana mainnet. Use for JitoSOL rank or delegation-set comparisons, not ordinary Jito MEV or BAM rewards.
 license: MIT
-compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC.
+compatibility: Requires Bun 1.3.3, internet access and a mainnet RPC URL.
 metadata:
   created: "2026-10-03"
-  last_updated: "2026-10-03"
+  last_updated: "2026-10-08"
 ---
 
 # JitoSOL Steward
@@ -18,7 +18,7 @@ Run this read-only check from the bundle root:
 bun src/skills/jitosol-steward/scripts/check.ts --profile my-validator --format markdown
 ```
 
-Use `--vote-account PUBKEY` for an explicit vote account or `--validator PUBKEY` for vote/identity resolution. `--config PATH` and `--rpc URL` follow shared Helius precedence. Resolve missing profile/RPC setup through [onboarding](references/onboarding.md), then resume. SSH and signers are unnecessary.
+Use `--vote-account PUBKEY` for an explicit vote account or `--validator PUBKEY` for vote/identity resolution. `--config PATH` and `--rpc URL` follow the shared RPC precedence. Resolve missing profile/RPC setup through [onboarding](references/onboarding.md), then resume. SSH and signers are unnecessary.
 
 Add `--pool-summary` to compare all positive algorithmic target fractions against `1 / current member count` and show the five largest actual active-stake balances. Use `--format json` for complete addresses, exact lamports and comparable records.
 

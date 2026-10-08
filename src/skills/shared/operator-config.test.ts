@@ -17,7 +17,15 @@ test('requires a selection for multiple profiles; honors default and explicit ta
 test('reports missing setup and credentials without exposing secrets',()=>{
  expect(()=>selectInput({}, {version:1,profiles:{}},{})).toThrow('ONBOARDING_REQUIRED');
  expect(()=>selectInput({profile:'one'},config,{})).toThrow('ONBOARDING_REQUIRED');
- expect(()=>selectInput({validator:vote,rpcUrl:'https://example.com/?secret=hidden'},config,{})).toThrow('Mainnet RPC');
+ expect(()=>selectInput({validator:vote,rpcUrl:'ftp://example.com/?secret=hidden'},config,{})).toThrow('Mainnet RPC');
+ expect(()=>selectInput({validator:vote,rpcUrl:'not a url'},config,{})).toThrow('Invalid RPC URL');
+});
+test('accepts any http or https endpoint and reads legacy and current verification sources',()=>{
+ expect(selectInput({validator:vote,rpcUrl:'https://example.com/?secret=hidden'},config,{}).rpcUrl).toBe('https://example.com/?secret=hidden');
+ expect(selectInput({validator:vote,rpcUrl:'http://localhost:8899'},config,{}).rpcUrl).toBe('http://localhost:8899');
+ const current={...profile,rpcEnv:undefined,rpcUrl:'http://10.0.0.5:8899',verification:{source:'rpc' as const,checkedAt:'2026-10-08T00:00:00Z'}};
+ expect(validateConfig({version:2,profiles:{current,legacy:{...current,verification:profile.verification}}}).profiles.current.verification.source).toBe('rpc');
+ expect(()=>validateConfig({version:2,profiles:{bad:{...current,verification:{source:'other',checkedAt:current.verification.checkedAt}}}})).toThrow('Invalid operator profile');
 });
 test('verifies network before accounts and handles ambiguity',async()=>{
  await expect(verifyValidator(vote,url,async()=> 'testnet')).rejects.toThrow('network mismatch');

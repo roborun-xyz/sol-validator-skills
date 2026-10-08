@@ -2,10 +2,10 @@
 name: votex-status
 description: Fetch current or historical Votex/The Vault vote-buy status, including target epoch, USDC bids, bid share, acquired veV when published, and on-chain IncreaseVoteBuy fallback transactions. Use for Vault/Votex epoch and allocation questions.
 license: MIT
-compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC.
+compatibility: Requires Bun 1.3.3, internet access and a mainnet RPC URL. Gauge names need an endpoint that serves the DAS `getAsset` method (Helius does); without it gauges are listed by address.
 metadata:
   created: "2026-05-31"
-  last_updated: "2026-10-05"
+  last_updated: "2026-10-08"
 ---
 
 # Votex Status

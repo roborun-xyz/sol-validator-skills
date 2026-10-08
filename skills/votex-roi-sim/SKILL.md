@@ -2,10 +2,10 @@
 name: votex-roi-sim
 description: Simulate Votex/The Vault vote-buy ROI for a validator gauge, including bid dilution, acquired veV, gauge-directed SOL, optional SFDP match, revenue, net profit, ROI, and break-even sizing. Use when comparing Votex bid amounts or estimating revenue from gauge-directed stake.
 license: MIT
-compatibility: Requires Bun 1.3.3, internet access and Helius mainnet RPC.
+compatibility: Requires Bun 1.3.3, internet access and a mainnet RPC URL.
 metadata:
   created: "2026-06-01"
-  last_updated: "2026-10-05"
+  last_updated: "2026-10-08"
 ---
 
 # Votex ROI Simulation
@@ -39,7 +39,7 @@ Useful overrides: `--current-bid`, `--other-bids`, `--total-vev`, `--total-gauge
 
 `--lamports-per-staked-sol` defaults to `105000`, a fixed assumption for revenue per directed staked SOL over the modeled period, not a measured value. Revenue and ROI scale linearly with it, so supply the validator's own measured figure when one is available and always report which value was used.
 
-The helper reads VotaFi stats, SolanaVault stakebot data, Jupiter SOL/USD, and Helius RPC. If active-epoch stats are unpublished, use only a user-approved comparable epoch or explicit overrides. Published stats that include a non-USDC vote buy fail the simulation; explicit overrides do not bypass that.
+The helper reads VotaFi stats, SolanaVault stakebot data, Jupiter SOL/USD, and the configured mainnet RPC. If active-epoch stats are unpublished, use only a user-approved comparable epoch or explicit overrides. Published stats that include a non-USDC vote buy fail the simulation; explicit overrides do not bypass that.
 
 Report inputs, sources, assumptions, and a bid comparison range. Treat results as estimates and recompute near the bidding deadline.
 

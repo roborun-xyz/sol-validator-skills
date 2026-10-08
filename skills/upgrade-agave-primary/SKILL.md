@@ -2,10 +2,10 @@
 name: upgrade-agave-primary
 description: Upgrade a voting Agave or Jito-Agave mainnet primary through a verified compatible Agave backup, including failover, failback and rollback. Use upgrade-agave for an unstaked backup alone.
 license: MIT
-compatibility: Requires SSH and release-matched validator/build tooling. Mainnet checks use Helius RPC; optional onboarding uses Bun 1.3.3.
+compatibility: Requires SSH and release-matched validator/build tooling. Mainnet checks use the configured mainnet RPC; optional onboarding uses Bun 1.3.3.
 metadata:
   created: "2026-09-20"
-  last_updated: "2026-09-30"
+  last_updated: "2026-10-08"
 ---
 
 # Upgrade an Agave primary through a backup
@@ -25,7 +25,7 @@ Verify missing or stale facts through [inventory](references/inventory.md). Ther
 
 ## Fail over and upgrade
 
-1. Follow the shared identity handoff with the primary as outgoing and backup as incoming: verify incoming readiness and voter availability, demote the primary, confirm its live and persistent restart identities are unstaked, transfer the freshly written tower with the required verification, and promote the backup using `set-identity --require-tower`. Confirm single-instance voting and Helius vote-account progress before stopping the primary.
+1. Follow the shared identity handoff with the primary as outgoing and backup as incoming: verify incoming readiness and voter availability, demote the primary, confirm its live and persistent restart identities are unstaked, transfer the freshly written tower with the required verification, and promote the backup using `set-identity --require-tower`. Confirm single-instance voting and on-chain vote-account progress before stopping the primary.
 2. Stop only the primary's verified supervisor and process. Install the staged release through the shared procedure and restart the primary unstaked. Verify the actual executable/version, supervisor persistence and integration health while monitoring backup votes.
 3. Wait for measured catchup and complete the shared incoming readiness and authorized-voter checks on the restarted primary. Do not demote the backup until the primary is ready for handoff. An ambiguous identity transition requires diagnosis, not a repeated promotion command.
 

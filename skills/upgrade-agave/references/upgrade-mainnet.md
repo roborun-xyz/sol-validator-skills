@@ -2,10 +2,10 @@
 name: upgrade-mainnet
 description: Upgrade an operator-configured Firedancer primary through a verified Agave backup, preserving single-validator voting and fresh-tower requirements across failover and failback.
 license: MIT
-compatibility: Requires SSH and release-matched validator/build tooling. Mainnet checks use Helius RPC; optional onboarding uses Bun 1.3.3.
+compatibility: Requires SSH and release-matched validator/build tooling. Mainnet checks use the configured mainnet RPC; optional onboarding uses Bun 1.3.3.
 metadata:
   created: "2026-05-27"
-  last_updated: "2026-09-30"
+  last_updated: "2026-10-08"
 ---
 
 # Upgrade mainnet Firedancer with an Agave backup
@@ -30,7 +30,7 @@ Complete an isolated build and stage installation/config changes before borrowin
 
 1. Demote the primary to its verified unstaked identity using the installed fdctl's `set-identity` command and exact config. Verify the resulting local identity. Ensure its supervisor would restart it unstaked before continuing; runtime identity and restart configuration are separate facts.
 2. After demotion, copy the freshly written tower for the staked identity from the primary ledger to the backup ledger using an explicit unique temporary file. Verify source/destination SHA-256, tower identity/format, runtime ownership and required permissions. Never reuse an older backup tower. If tower freshness or demotion is uncertain, stop before promotion.
-3. Recheck backup readiness against the final tower using the shared handoff procedure, then promote with the verified Agave binary and ledger, the staked identity path, and `set-identity --require-tower`. Verify local identity/health and Helius vote-account progress/non-delinquency. Confirm the primary remains unstaked. Do not proceed on an ambiguous identity-switch result.
+3. Recheck backup readiness against the final tower using the shared handoff procedure, then promote with the verified Agave binary and ledger, the staked identity path, and `set-identity --require-tower`. Verify local identity/health and on-chain vote-account progress/non-delinquency through the configured RPC. Confirm the primary remains unstaked. Do not proceed on an ambiguous identity-switch result.
 
 ## Upgrade the primary
 
@@ -42,7 +42,7 @@ Verify actual running version, primary unstaked identity, supervisor persistence
 
 1. Recheck primary catchup and loaded voter readiness before demoting the backup. Demote the backup to its verified unstaked identity using its exact Agave ledger. Verify local identity and restart persistence.
 2. Copy the fresh staked-identity tower from the just-demoted backup back to the primary. Repeat checksum, ownership, format and freshness checks; never restore the pre-upgrade tower.
-3. Recheck the primary against the final tower using the shared handoff procedure, then promote with the verified fdctl/config and `set-identity --require-tower`. Verify its local identity, health and Helius vote progress while the backup stays unstaked.
+3. Recheck the primary against the final tower using the shared handoff procedure, then promote with the verified fdctl/config and `set-identity --require-tower`. Verify its local identity, health and on-chain vote progress while the backup stays unstaked.
 4. Restore the primary's intended persistent restart policy only after validating the live transition, including any deliberate warmup-first policy and voter loading. Verify the backup's persistent config stays unstaked. Do not assume a symlink switch changes a running process's identity.
 
 ## Verify and record

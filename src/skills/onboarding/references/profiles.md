@@ -1,13 +1,13 @@
 ---
 created: 2026-09-15
-last_updated: 2026-10-05
+last_updated: 2026-10-08
 ---
 
 # Local operator profiles
 
 Default location: `~/.config/validator-ops/config.json`. Override with `VALIDATOR_OPS_CONFIG` or `--config PATH` (highest priority). Configuration version 2 supports mainnet chain-only checks. It is independent of the existing Markdown host inventory.
 
-RPC URLs are saved per profile after verification. Apply [RPC selection](../../shared/runtime.md#discover-operator-configuration); invalid nonempty overrides fail rather than silently selecting another endpoint. Only Helius mainnet HTTPS endpoints are accepted, and validator resolution also checks genesis. The URL may contain an API key: keep this operator file outside the source repository and installed skill, never print it, and retain atomic writes with mode 0600. Do not run simultaneous profile updates against the same file.
+RPC URLs are saved per profile after verification. Apply [RPC selection](../../shared/runtime.md#discover-operator-configuration); invalid nonempty overrides fail rather than silently selecting another endpoint. Any http or https endpoint is accepted; validator resolution checks the mainnet genesis hash before anything is saved. Helius is the tested default. Use plain http only for an RPC node on a network you control. The URL may contain an API key: keep this operator file outside the source repository and installed skill, never print it, and retain atomic writes with mode 0600. Do not run simultaneous profile updates against the same file.
 
 ```bash
 # Inspect local setup without network access; prints public profile fields only.
@@ -37,7 +37,7 @@ Saved shape (illustrative public keys):
       "voteAccount": "REPLACE_WITH_VERIFIED_VOTE_ACCOUNT",
       "identity": "REPLACE_WITH_VERIFIED_IDENTITY",
       "rpcUrl": "https://mainnet.helius-rpc.com/?api-key=<API_KEY>",
-      "verification": { "source": "helius-rpc", "checkedAt": "2026-09-15T00:00:00Z" }
+      "verification": { "source": "rpc", "checkedAt": "2026-09-15T00:00:00Z" }
     }
   }
 }

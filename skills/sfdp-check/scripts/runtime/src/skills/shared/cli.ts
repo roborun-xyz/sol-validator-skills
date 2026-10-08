@@ -13,7 +13,7 @@ export const EPOCH_QUERY_HELP = `Options:
   --epochs <n>                  Number of completed epochs to fetch (default: 30)
   --include-current             Include current in-progress epoch instead of only completed epochs
   --format <markdown|csv|json>  Output format (default: markdown)
-  --rpc <url>                   Helius mainnet RPC URL (default: SOLANA_RPC_URL or saved profile URL)
+  --rpc <url>                   Mainnet RPC URL (default: SOLANA_RPC_URL or saved profile URL)
   --config <path>              Local operator configuration
   --profile <name>             Configured validator profile
   --help                        Show this help text`;

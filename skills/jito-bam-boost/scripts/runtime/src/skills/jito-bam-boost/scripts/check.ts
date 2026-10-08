@@ -404,7 +404,7 @@ function usage(code = 2): never {
 
 Options:
   --claim-epoch <N>       Check one claim distributor epoch
-  --rpc <URL>            Helius RPC override
+  --rpc <URL>            Mainnet RPC override
   --from-epoch <N>        Restrict the published claim epoch range
   --to-epoch <N>          Restrict the published claim epoch range
   --format markdown|json  Output format (default: markdown)`);

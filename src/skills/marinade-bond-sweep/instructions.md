@@ -2,10 +2,10 @@
 name: marinade-bond-sweep
 description: Sweep surplus SOL from a Solana mainnet validator vote account and identity account into its existing Marinade Validator Bond using keypairs held on the local operator machine. Use when funding a validator's Marinade bond while retaining vote-account rent exemption and at least 5 SOL in the identity.
 license: MIT
-compatibility: Requires Bun 1.3.3, Node.js >=20.18.0, Solana CLI, validator-bonds CLI 2.6.0 and Helius mainnet RPC. Execution requires operator-owned local signers.
+compatibility: Requires Bun 1.3.3, Node.js >=20.18.0, Solana CLI, validator-bonds CLI 2.6.0 and a mainnet RPC URL. Execution requires operator-owned local signers.
 metadata:
   created: "2026-08-24"
-  last_updated: "2026-10-05"
+  last_updated: "2026-10-08"
 ---
 
 # Marinade Bond Sweep
@@ -43,7 +43,7 @@ Ensure the Bun global binary directory is on PATH. Preflight checks required `fu
 ## Resolve the validator
 
 1. Resolve the requested validator from an explicit vote account or the operator's chain profile (`../onboarding/instructions.md`). Reuse verified public keys and pass them explicitly to the executor. A profile or host key path is not evidence that a local signer is available.
-2. Re-check the vote account through Helius and derive both the live identity and current authorized-withdrawer from its finalized state. Do not use a testnet validator, an unstaked/warmup identity, a stale inventory value, or an ambiguous host.
+2. Re-check the vote account through the configured mainnet RPC and derive both the live identity and current authorized-withdrawer from its finalized state. Do not use a testnet validator, an unstaked/warmup identity, a stale inventory value, or an ambiguous host.
 3. Discover these three signer roles on the local operator machine without reading keypair contents:
    - current validator identity keypair;
    - current vote authorized-withdrawer keypair;
@@ -98,7 +98,7 @@ The executor re-runs one parallelized finalized preflight and refuses to sign un
 4. simulate the exact recalculated funding transaction;
 5. re-read the identity and require the same amount to leave at least the `5 SOL` hard floor;
 6. submit that exact amount at finalized commitment;
-7. resolve the funding signature from Helius and verify the `FundBond` transaction, funded stake account, the identity balance that transaction left against the `5 SOL` hard floor, vote rent reserve, bond ownership increase, and withdrawal state.
+7. resolve the funding signature from the configured mainnet RPC and verify the `FundBond` transaction, funded stake account, the identity balance that transaction left against the `5 SOL` hard floor, vote rent reserve, bond ownership increase, and withdrawal state.
 
 After each submission the executor polls its read-only verification (signature status, vote and identity balances, bond ownership) for a bounded period, so a lagging RPC node is not reported as a failed mutation. It never repeats a submission. Funding is sized only from an identity balance that already includes the withdrawal. Only transport failures and a few failed `show-bond` reads are retried; a validation failure is reported at once.
 

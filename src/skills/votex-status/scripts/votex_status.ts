@@ -107,6 +107,7 @@ type TransactionRow = {
 type ComputedRow = {
   gauge: string;
   validatorName: string;
+  tokenMint: string | null;
   usdcRaw: bigint;
   usdc: number;
   bidSharePct: number;
@@ -142,6 +143,8 @@ async function rpcBatch<T>(calls: Array<{ method: string; params: unknown }>): P
   });
 }
 
+let nameLookupUnavailable = false;
+
 async function resolveGaugeNames(gauges: string[]): Promise<Map<string, NameResolution>> {
   const names = new Map<string, NameResolution>();
   await Promise.all(
@@ -167,9 +170,17 @@ async function resolveGaugeNames(gauges: string[]): Promise<Map<string, NameReso
         if (quarryData.length < 72) return;
 
         const tokenMint = base58Encode(quarryData.subarray(40, 72));
-        const asset = await rpc<any>("getAsset", { id: tokenMint });
-        const name = asset?.content?.metadata?.name;
-        names.set(gauge, { name: typeof name === "string" ? name.trim() : "", quarry, tokenMint });
+        let name = "";
+        try {
+          const asset = await rpc<any>("getAsset", { id: tokenMint });
+          const metadataName = asset?.content?.metadata?.name;
+          if (typeof metadataName === "string") name = metadataName.trim();
+        } catch {
+          // getAsset is a DAS extension (Helius and a few others). Without it
+          // the gauge is still listed by address and token mint, just unnamed.
+          nameLookupUnavailable = true;
+        }
+        names.set(gauge, { name, quarry, tokenMint });
       } catch {
         names.set(gauge, { name: "" });
       }
@@ -229,6 +240,7 @@ function serializeRow(row: ComputedRow) {
   return {
     gauge: row.gauge,
     validatorName: row.validatorName,
+    tokenMint: row.tokenMint,
     usdc: row.usdc,
     usdcRaw: row.usdcRaw.toString(),
     bidSharePct: row.bidSharePct,
@@ -271,6 +283,7 @@ async function buildFromPublishedStats(response: Response) {
       return {
         gauge: row.gauge,
         validatorName: names.get(row.gauge)?.name ?? "",
+        tokenMint: names.get(row.gauge)?.tokenMint ?? null,
         usdcRaw: row.usdcRaw,
         usdc: Number(row.usdcRaw) / 1e6,
         bidSharePct: bidSharePct(row.usdcRaw, totalUsdcRaw),
@@ -431,6 +444,7 @@ async function buildFromOnChainTransactions() {
       ({
         gauge: tx.gauge,
         validatorName: names.get(tx.gauge)?.name ?? "",
+        tokenMint: names.get(tx.gauge)?.tokenMint ?? null,
         usdcRaw: 0n,
         usdc: 0,
         bidSharePct: 0,
@@ -552,6 +566,7 @@ if (output.scanWindow) {
   console.log(`Scan window: ${output.scanWindow.start} -> ${output.scanWindow.end}`);
   console.log(`Matched IncreaseVoteBuy transactions: ${output.scanWindow.transactionCount}`);
 }
+if (nameLookupUnavailable) console.log("Validator names unavailable: the RPC endpoint does not serve getAsset. Gauges are listed by address; token mints are in the JSON output.");
 console.log("");
 console.log("| validator | gauge | USDC bid | bid share | acquired veV |");
 console.log("|---|---|---:|---:|---:|");

@@ -7,7 +7,7 @@ import { base58Decode } from './base58';
 
 export type Profile = {
   cluster: 'mainnet-beta'; voteAccount: string; identity: string; rpcUrl?: string; rpcEnv?: string;
-  verification: { source: 'helius-rpc'; checkedAt: string };
+  verification: { source: 'rpc' | 'helius-rpc'; checkedAt: string };
 };
 export type Config = { version: 1 | 2; defaultProfile?: string; profiles: Record<string, Profile> };
 export type Input = { config?: string; profile?: string; validator?: string; voteAccount?: string; rpcUrl?: string };
@@ -33,10 +33,10 @@ export function validateConfig(value: any): Config {
   if (Object.keys(value).some(k => !['version', 'defaultProfile', 'profiles'].includes(k))) throw new Error('Unknown operator config field.');
   for (const [name, p] of Object.entries(value.profiles) as [string, any][]) {
     if (['__proto__','constructor','prototype'].includes(name) || !/^[a-zA-Z0-9_-]+$/.test(name) || p?.cluster !== 'mainnet-beta' || !isPublicKey(p.voteAccount) || !isPublicKey(p.identity)
-      || (p.rpcEnv !== undefined && (value.version !== 1 || typeof p.rpcEnv !== 'string' || !/^[A-Z_][A-Z0-9_]*$/.test(p.rpcEnv))) || (p.rpcUrl === undefined && p.rpcEnv === undefined) || p.verification?.source !== 'helius-rpc' || typeof p.verification?.checkedAt !== 'string' || !Number.isFinite(Date.parse(p.verification?.checkedAt)))
+      || (p.rpcEnv !== undefined && (value.version !== 1 || typeof p.rpcEnv !== 'string' || !/^[A-Z_][A-Z0-9_]*$/.test(p.rpcEnv))) || (p.rpcUrl === undefined && p.rpcEnv === undefined) || !['rpc', 'helius-rpc'].includes(p.verification?.source) || typeof p.verification?.checkedAt !== 'string' || !Number.isFinite(Date.parse(p.verification?.checkedAt)))
       throw new Error('Invalid operator profile: check name, network, public keys, RPC configuration and verification.');
     if (Object.keys(p).some(k => !['cluster','voteAccount','identity','rpcUrl','rpcEnv','verification'].includes(k)) || Object.keys(p.verification).some(k => !['source','checkedAt'].includes(k))) throw new Error('Unknown profile field.');
-    if (p.rpcUrl !== undefined) { if (typeof p.rpcUrl !== 'string' || !p.rpcUrl.trim()) throw new Error('Invalid saved RPC URL.'); heliusUrl(p.rpcUrl); }
+    if (p.rpcUrl !== undefined) { if (typeof p.rpcUrl !== 'string' || !p.rpcUrl.trim()) throw new Error('Invalid saved RPC URL.'); mainnetRpcUrl(p.rpcUrl); }
   }
   if (value.defaultProfile !== undefined && (typeof value.defaultProfile !== 'string' || !Object.hasOwn(value.profiles, value.defaultProfile)))
     throw new Error('Default profile does not exist.');
@@ -65,11 +65,13 @@ export async function saveConfig(config: Config, path?: string) {
   try { await writeFile(tmp, JSON.stringify(clean, null, 2) + '\n', { mode: 0o600, flag: 'wx' }); await rename(tmp, target); }
   finally { await unlink(tmp).catch(() => {}); }
 }
-export function heliusUrl(url?: string): string {
-  if (!url) throw new Error('ONBOARDING_REQUIRED: provide --rpc, set SOLANA_RPC_URL, or save a Helius URL through onboarding.');
+// Any http or https endpoint is accepted; the mainnet genesis hash is checked
+// before a profile is saved and by mutation preflights. Plain http is for RPC
+// nodes on a network the operator controls.
+export function mainnetRpcUrl(url?: string): string {
+  if (!url) throw new Error('ONBOARDING_REQUIRED: provide --rpc, set SOLANA_RPC_URL, or save an RPC URL through onboarding.');
   let u: URL; try { u = new URL(url); } catch { throw new Error('Invalid RPC URL.'); }
-  if (u.protocol !== 'https:' || u.hostname !== 'mainnet.helius-rpc.com' || u.username || u.password || u.port || u.pathname !== '/' || u.hash)
-    throw new Error('Mainnet RPC must use https://mainnet.helius-rpc.com.');
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error('Mainnet RPC must be an http or https URL.');
   return url;
 }
 function selectProfile(input: Input, config: Config) {
@@ -100,7 +102,7 @@ export function selectRpc(input: Input, config: Config, env = process.env) {
   if (!explicit && !environment && !name && names.length > 1)
     throw new Error(`PROFILE_REQUIRED: choose --profile (${names.join(', ')}).`);
   const source = explicit ? 'cli' : environment ? 'env' : 'config';
-  return {rpcUrl: heliusUrl(explicit ?? environment ?? profile?.rpcUrl), rpcSource: source};
+  return {rpcUrl: mainnetRpcUrl(explicit ?? environment ?? profile?.rpcUrl), rpcSource: source};
 }
 export async function resolveRpc(input: Input = {}) {
   return selectRpc(input, await readConfig(input.config));

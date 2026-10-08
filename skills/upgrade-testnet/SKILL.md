@@ -2,10 +2,10 @@
 name: upgrade-testnet
 description: Upgrade Firedancer or Frankendancer on an operator-configured testnet instance with leader-window checks, release-matched tooling, scoped restart and voting verification.
 license: MIT
-compatibility: Requires SSH and release-matched validator/build tooling. Mainnet checks use Helius RPC; optional onboarding uses Bun 1.3.3.
+compatibility: Requires SSH and release-matched validator/build tooling. Mainnet checks use the configured mainnet RPC; optional onboarding uses Bun 1.3.3.
 metadata:
   created: "2026-05-27"
-  last_updated: "2026-09-30"
+  last_updated: "2026-10-08"
 ---
 
 # Upgrade testnet Firedancer

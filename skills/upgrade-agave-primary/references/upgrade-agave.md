@@ -2,10 +2,10 @@
 name: upgrade-agave
 description: Upgrade an operator-configured Agave or Jito-Agave unstaked mainnet backup, verifying its current role, isolated process lifecycle, installed binary and catchup.
 license: MIT
-compatibility: Requires SSH and release-matched validator/build tooling. Mainnet checks use Helius RPC; optional onboarding uses Bun 1.3.3.
+compatibility: Requires SSH and release-matched validator/build tooling. Mainnet checks use the configured mainnet RPC; optional onboarding uses Bun 1.3.3.
 metadata:
   created: "2026-05-27"
-  last_updated: "2026-09-30"
+  last_updated: "2026-10-08"
 ---
 
 # Upgrade an Agave backup
