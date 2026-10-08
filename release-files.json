@@ -7,8 +7,6 @@
   "README.md",
   "bun.lock",
   "docs/DEPENDENCY_AUDIT.md",
-  "docs/OPEN_SOURCE_READINESS.md",
-  "docs/RELEASING.md",
   "docs/VALIDATION.md",
   "docs/demo.gif",
   "docs/demo.tape",
