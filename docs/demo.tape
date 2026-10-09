@@ -1,7 +1,10 @@
 # VHS tape for docs/demo.gif: fresh install, onboarding, revenue check.
 # Requires SOLANA_RPC_URL in the environment; see CONTRIBUTING.md. The vote account is public.
 # The demo runs in a throwaway directory with its own operator configuration,
-# so it never touches ~/.config/validator-ops.
+# so it never touches ~/.config/validator-ops. The claude invocation passes
+# --setting-sources project so the recorder's personal ~/.claude instructions
+# and settings stay out of the recording; model, effort and permission mode are
+# set explicitly for the same reason.
 
 Output docs/demo.gif
 
@@ -34,7 +37,7 @@ Sleep 3s
 
 Type "clear"
 Enter
-Type `claude "Use the onboarding skill to set up vote account R2D2vs3bJwpNF2ejaB6UW1JdCZ5VstuAmuwxDuUUWNj as profile demo (SOLANA_RPC_URL is already set in my environment), then use validator-revenue to show me the last 3 completed epochs."`
+Type `claude --setting-sources project --permission-mode auto --model fable --effort high "Use the onboarding skill to set up vote account R2D2vs3bJwpNF2ejaB6UW1JdCZ5VstuAmuwxDuUUWNj as profile demo (SOLANA_RPC_URL is already set in my environment), then use validator-revenue to show me the last 3 completed epochs."`
 Enter
 Wait+Screen@60s /trust this folder|auto mode on|bypass permissions on/
 Sleep 2s

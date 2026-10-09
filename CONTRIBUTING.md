@@ -40,4 +40,4 @@ export SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=...   # never comm
 vhs docs/demo.tape
 ```
 
-The tape installs from the public repository into a throwaway directory under `/tmp`, so record it after the change it should show has reached `main`. The vote account it onboards is public; edit the tape to show another.
+The tape installs from the public repository into a throwaway directory under `/tmp`, so record it after the change it should show has reached `main`. The vote account it onboards is public; edit the tape to show another. The `claude` call passes `--setting-sources project`, so your personal `~/.claude` instructions and settings do not shape the recorded session.
