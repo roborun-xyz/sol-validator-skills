@@ -13,17 +13,17 @@ Agent Skills for running a Solana validator from Claude Code, Codex or any other
 
 ```bash
 # See what is available
-bunx --bun skills@1.7.0 add roborun-xyz/sol-validator-skills --list
+bunx --bun skills add roborun-xyz/sol-validator-skills --list
 
 # Install the skills you want for the agent you use
-bunx --bun skills@1.7.0 add roborun-xyz/sol-validator-skills \
+bunx --bun skills add roborun-xyz/sol-validator-skills \
   --skill onboarding validator-performance validator-revenue \
   --agent claude-code
 ```
 
 Then tell your agent: *"Use onboarding to set up my validator, then give me a 30-epoch performance review."*
 
-Requirements are Bun 1.3.3 and a mainnet RPC URL for chain queries: any http or https endpoint works, and Helius is the tested default. SSH, Solana CLI, Rust and Python are needed only by the workflows that use them; each `SKILL.md` says which. `npx skills@1.7.0 add ...` works the same way. Any other Agent Skills client can copy a [`skills/<name>`](skills/README.md) directory: each one carries its own runtime, dependency lock and license.
+Requirements are Bun 1.3.3 and a mainnet RPC URL for chain queries: any http or https endpoint works, and Helius is the tested default. SSH, Solana CLI, Rust and Python are needed only by the workflows that use them; each `SKILL.md` says which. `npx skills add ...` works the same way. Any other Agent Skills client can copy a [`skills/<name>`](skills/README.md) directory: each one carries its own runtime, dependency lock and license.
 
 ## What a check looks like
 

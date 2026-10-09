@@ -27,4 +27,4 @@ Each directory is one installable Agent Skill. It carries its own `SKILL.md`, th
 | [votex-roi-sim](votex-roi-sim/SKILL.md) | Simulate Votex/The Vault vote-buy ROI for a validator gauge, including bid dilution, acquired veV, gauge-directed SOL, optional SFDP match, revenue, net profit, ROI, and break-even sizing. |
 | [votex-status](votex-status/SKILL.md) | Fetch current or historical Votex/The Vault vote-buy status, including target epoch, USDC bids, bid share, acquired veV when published, and on-chain IncreaseVoteBuy fallback transactions. |
 
-Install one with `bunx --bun skills@1.7.0 add roborun-xyz/sol-validator-skills --skill <name> --agent <agent>`, or copy the directory into any Agent Skills client.
+Install one with `bunx --bun skills add roborun-xyz/sol-validator-skills --skill <name> --agent <agent>`, or copy the directory into any Agent Skills client.

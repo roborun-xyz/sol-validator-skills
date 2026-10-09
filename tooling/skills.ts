@@ -148,7 +148,7 @@ Each directory is one installable Agent Skill. It carries its own \`SKILL.md\`, 
 |---|---|
 ${rows.sort().join('\n')}
 
-Install one with \`bunx --bun skills@1.7.0 add roborun-xyz/sol-validator-skills --skill <name> --agent <agent>\`, or copy the directory into any Agent Skills client.
+Install one with \`bunx --bun skills add roborun-xyz/sol-validator-skills --skill <name> --agent <agent>\`, or copy the directory into any Agent Skills client.
 `;
 }
 

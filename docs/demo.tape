@@ -27,7 +27,7 @@ Type "clear"
 Enter
 Show
 
-Type "bunx --bun skills@1.7.0 add roborun-xyz/sol-validator-skills --skill onboarding validator-revenue --agent claude-code --yes"
+Type "bunx --bun skills add roborun-xyz/sol-validator-skills --skill onboarding validator-revenue --agent claude-code --yes"
 Enter
 Wait+Screen@120s /Done!/
 Sleep 3s
