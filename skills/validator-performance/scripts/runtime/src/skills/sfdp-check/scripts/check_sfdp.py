@@ -21,6 +21,20 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 API_BASE = "https://api.solana.org/api/community/v1"
 
+# fleet.json client value -> SFDP required-version field prefix.
+# "firedancer" keeps its historical meaning (Frankendancer, 0.x versions) for backward compatibility.
+CLIENT_PREFIXES = {
+    "agave": "agave",
+    "jito-agave": "agave",
+    "firedancer": "firedancer",
+    "firedancer-full": "firedancer_full",
+}
+BOUND_FIELDS = tuple(
+    f"{prefix}_{kind}_version" for prefix in ("agave", "firedancer", "firedancer_full") for kind in ("min", "max")
+)
+# Full Firedancer uses CalVer (e.g. 26.10.3); Frankendancer reports 0.x versions.
+FULL_FIREDANCER_MIN_MAJOR = 26
+
 
 @dataclass(frozen=True)
 class ValidatorCheck:
@@ -65,7 +79,7 @@ def load_fleet(path: str) -> tuple[dict[str, Any], list[ValidatorCheck]]:
         item = ValidatorCheck(**host)
         if not all(isinstance(getattr(item, key), str) for key in ValidatorCheck.__dataclass_fields__ if key != "rpc_port"):
             raise ValueError("Host fields must be strings except rpc_port")
-        if item.group not in groups or item.cluster not in ("mainnet-beta", "testnet") or item.client not in ("agave", "jito-agave", "firedancer"):
+        if item.group not in groups or item.cluster not in ("mainnet-beta", "testnet") or item.client not in CLIENT_PREFIXES:
             raise ValueError("Invalid host group, cluster or client")
         if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.@-]*", item.host) or type(item.rpc_port) is not int or not 1 <= item.rpc_port <= 65535:
             raise ValueError("Use a safe SSH alias and an integer RPC port")
@@ -193,8 +207,41 @@ def compare_versions(left: str, right: str) -> int:
 
 
 def client_bounds(requirement: dict[str, Any], client: str) -> tuple[str | None, str | None]:
-    prefix = "firedancer" if client == "firedancer" else "agave"
+    prefix = CLIENT_PREFIXES[client]
     return requirement.get(f"{prefix}_min_version"), requirement.get(f"{prefix}_max_version")
+
+
+def client_mismatch_warning(version: str, client: str) -> str | None:
+    """Warn when a reported version's shape contradicts the configured client family."""
+    try:
+        major = split_version(version)[0][0]
+    except (ValueError, IndexError):
+        return None
+    if client == "firedancer" and major >= FULL_FIREDANCER_MIN_MAJOR:
+        return (
+            f"client 'firedancer' means Frankendancer, but version {version} looks like full-Firedancer CalVer; "
+            "set client to 'firedancer-full' in fleet.json if this host runs full Firedancer"
+        )
+    if client == "firedancer-full" and major < FULL_FIREDANCER_MIN_MAJOR:
+        return (
+            f"client 'firedancer-full' but version {version} does not look like full-Firedancer CalVer; "
+            "use 'firedancer' for Frankendancer"
+        )
+    return None
+
+
+def requirement_changes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Epochs (after the first returned row) where any published version bound changes."""
+    changes = []
+    for prev, row in zip(rows, rows[1:]):
+        diff = {
+            field: {"from": prev.get(field), "to": row.get(field)}
+            for field in BOUND_FIELDS
+            if prev.get(field) != row.get(field)
+        }
+        if diff:
+            changes.append({"epoch": row.get("epoch"), "changes": diff})
+    return changes
 
 
 def check_version(version: str, requirement: dict[str, Any], client: str) -> tuple[bool, str]:
@@ -260,6 +307,7 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
                 "vote_account": item.vote_account,
                 "ok": True,
                 "errors": [],
+                "warnings": [],
                 "requirements": [],
             }
             try:
@@ -277,8 +325,16 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
                 if not result["version"]:
                     result["ok"] = False
                     result["errors"].append("missing solana-core version")
-                rows = required[item.cluster][:1] if args.current_only else required[item.cluster]
-                for req in rows:
+                if result.get("version"):
+                    warning = client_mismatch_warning(result["version"], item.client)
+                    if warning:
+                        # Ambiguous client family: do not let a Frankendancer bound silently pass full Firedancer.
+                        result["ok"] = False
+                        result["warnings"].append(warning)
+                for index, req in enumerate(required[item.cluster]):
+                    # --current-only still evaluates later rows, but only informationally,
+                    # so an upcoming bump (e.g. a new minimum from a later epoch) stays visible.
+                    enforced = not args.current_only or index == 0
                     if result.get("version"):
                         passed, reason = check_version(result["version"], req, item.client)
                     else:
@@ -287,12 +343,13 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
                         "epoch": req.get("epoch"),
                         "passed": passed,
                         "reason": reason,
+                        "enforced": enforced,
                         "min_version": client_bounds(req, item.client)[0],
                         "max_version": client_bounds(req, item.client)[1],
                         "inherited_from_prev_epoch": req.get("inherited_from_prev_epoch"),
                     }
                     result["requirements"].append(req_result)
-                    if not passed:
+                    if not passed and enforced:
                         result["ok"] = False
                         result["errors"].append(f"epoch {req.get('epoch')} version {reason}")
             except Exception as exc:  # noqa: BLE001 - report all operational failures.
@@ -305,26 +362,35 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         "checked_at_utc": now.isoformat(),
         "checked_at_local": now.astimezone(local_zone).isoformat(),
         "required_versions": required,
+        "requirement_changes": {cluster: requirement_changes(rows) for cluster, rows in required.items()},
         "participants": participant_results,
         "checks": checks,
     }
 
 
-def print_required(required: dict[str, list[dict[str, Any]]]) -> None:
-    print("SFDP required versions")
+def print_required(required: dict[str, list[dict[str, Any]]], changes: dict[str, list[dict[str, Any]]]) -> None:
+    print("SFDP required versions (all returned epochs, including upcoming)")
     for cluster, rows in required.items():
         print(f"  {cluster}:")
         for row in rows:
             print(
-                "    epoch {epoch}: agave {agave_min}..{agave_max} | firedancer {fd_min}..{fd_max}{inherit}".format(
+                "    epoch {epoch}: agave {agave_min}..{agave_max} | frankendancer {fd_min}..{fd_max}"
+                " | firedancer-full {full_min}..{full_max}{inherit}".format(
                     epoch=row.get("epoch"),
                     agave_min=row.get("agave_min_version") or "-",
                     agave_max=row.get("agave_max_version") or "none",
                     fd_min=row.get("firedancer_min_version") or "-",
                     fd_max=row.get("firedancer_max_version") or "none",
+                    full_min=row.get("firedancer_full_min_version") or "-",
+                    full_max=row.get("firedancer_full_max_version") or "none",
                     inherit=" inherited" if row.get("inherited_from_prev_epoch") else "",
                 )
             )
+        for change in changes.get(cluster, []):
+            parts = ", ".join(
+                f"{field} {diff['from'] or '-'} -> {diff['to'] or '-'}" for field, diff in change["changes"].items()
+            )
+            print(f"    CHANGE from epoch {change['epoch']}: {parts}")
 
 
 def print_participants(participants: dict[str, dict[str, Any]]) -> None:
@@ -345,17 +411,20 @@ def print_checks(checks: list[dict[str, Any]]) -> None:
         return
     print("\nLive validator checks")
     for check in checks:
-        status = "PASS" if check["ok"] else "FAIL"
+        status = "PASS" if check["ok"] else ("FAIL" if check.get("errors") else "WARN")
         print(
             f"  {status} {check['group']} {check['cluster']} {check['host']}:{check['rpc_port']} "
-            f"{check.get('version', '?')} identity={check.get('identity', '?')}"
+            f"client={check['client']} {check.get('version', '?')} identity={check.get('identity', '?')}"
         )
         for req in check.get("requirements", []):
             req_status = "ok" if req["passed"] else f"FAIL {req['reason']}"
+            scope = "" if req.get("enforced", True) else " [upcoming, not enforced by --current-only]"
             print(
                 f"    epoch {req['epoch']}: {req_status} "
-                f"(min={req['min_version'] or '-'}, max={req['max_version'] or 'none'})"
+                f"(min={req['min_version'] or '-'}, max={req['max_version'] or 'none'}){scope}"
             )
+        for warning in check.get("warnings", []):
+            print(f"    WARNING: {warning}")
         for err in check.get("errors", []):
             print(f"    error: {err}")
 
@@ -378,7 +447,7 @@ def main() -> int:
     parser.add_argument(
         "--current-only",
         action="store_true",
-        help="only check the first required-version row returned for each cluster",
+        help="enforce only the first required-version row per cluster; later rows are still evaluated and reported",
     )
     parser.add_argument("--timeout", type=int, default=12, help="HTTP/SSH timeout in seconds")
     args = parser.parse_args()
@@ -398,7 +467,7 @@ def main() -> int:
         print(json.dumps(data, indent=2, sort_keys=True))
     else:
         print(f"UTC: {data['checked_at_utc']} | local: {data['checked_at_local']}")
-        print_required(data["required_versions"])
+        print_required(data["required_versions"], data["requirement_changes"])
         print_participants(data["participants"])
         print_checks(data["checks"])
     return 1 if has_failures(data, args.api_only) else 0

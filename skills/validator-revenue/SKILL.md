@@ -1,11 +1,11 @@
 ---
 name: validator-revenue
-description: Fetch Solana validator historical gross and net revenue by epoch, including voting rewards, commission rewards, Jito rewards, BAM Boost JitoSOL subsidies, voting compensation, voting fees, and Marinade bond payments when present. Use for revenue history and per-epoch income; default to the last 30 completed mainnet epochs.
+description: Fetch Solana validator historical gross and net revenue by epoch, including voting rewards, commission rewards, Jito rewards, BAM Boost JitoSOL subsidies, voting compensation, vote transaction fees, Alpenglow VAT, and Marinade bond payments when present. Use for revenue history and per-epoch income; default to the last 30 completed mainnet epochs.
 license: MIT
 compatibility: Requires Bun 1.3.3, internet access and a mainnet RPC URL.
 metadata:
   created: "2026-05-27"
-  last_updated: "2026-10-08"
+  last_updated: "2026-10-22"
 ---
 
 # Validator Revenue
@@ -34,6 +34,8 @@ For a Marinade bidding bond, when an epoch has no published `ValidatorBond`-fund
 
 Keep `marinadeBondPaymentSol` as published payments and report `marinadeBondEstimatedPaymentSol` separately; deduct both from net revenue. Preserve the estimate's bid, activated stake and source URL in output and label affected net totals as provisional. Replace the estimate with published Bidding costs on subsequent queries, never add both for the same bidding obligation. Global Bidding publication is only an availability proxy: `no_record` means no matching published payment, not a verified zero liability, and publication can be partial. Auction-snapshot estimates exclude additional penalties/PSR and may differ from final settlement; existing published non-bidding costs remain included. Do not apply the SAM formula to institutional-only bonds. See [Marinade settlement rules](https://docs.marinade.finance/marinade-protocol/protocol-overview/stake-auction-market/bonds-settlements).
 
+Net revenue deducts vote transaction fees and the Alpenglow VAT. `votingFeeSol` (`voting_fee_sol`) is JPool/SVT's vote transaction fees, a TowerBFT cost; label it "vote transaction fees (TowerBFT; partial in 1064)", not a generic voting fee. From mainnet epoch 1064 (Alpenglow, 2026-10-21) a VAT of 0.8 SOL is debited from the vote account at the start of epoch N to admit it for epoch N+1. Attribute VAT to the epoch in which it is debited (epoch N), and repeat that convention when quoting VAT or net. `vatSol` (`vat_sol`) comes from JPool/SVT `vatDebit` (lamports) when published (`vatStatus` `svt`); otherwise from the vote account's `VATDebit` block reward in the first confirmed block of that epoch, read through `getBlock` rewards (`rpc_block`, block in `vatBlock`). Epochs before 1064 are `pre_alpenglow` with VAT 0 by definition. `rpc_absent` (first block has no `VATDebit` for this vote account) and `missing` (neither source available) are provisional: VAT is shown as 0 but not established, so say loudly that net for those epochs and the totals are provisional and may be overstated by up to 0.8 SOL per epoch. When JPool/SVT reports `admissionFailure: true`, report it; the vote account was not admitted for the next epoch.
+
 Calculate validator-operator Jito MEV revenue from Jito's official validator rewards as `floor(mev_revenue * mev_commission_bps / 10_000)`. Do not use JPool/SVT's raw `jitoReward` as revenue because that inflow can include returned Tip Distribution Account rent. Report the raw SVT inflow and excluded difference for reconciliation, but exclude the difference from gross and net revenue.
 
 BAM Boost accounting follows JIP-31's epoch-lagged distribution: a subsidy earned in epoch `N` is read from claim distributor epoch `N+1`. Treat presence in Jito's Merkle tree as an allocation, not proof of receipt. Derive the official distributor and Claim Status PDAs and check them at finalized commitment through the operator-selected mainnet RPC. Mark an allocation `claimed` only when the Claim Status account exists and its owner, discriminator, claimant, and amount match; an absent Claim Status marks a positive published allocation `unclaimed`, while malformed or mismatched Claim Status data fails verification. Report allocated and claimed amounts separately in raw JitoSOL and historical SOL equivalent.
@@ -42,7 +44,7 @@ Convert allocated JitoSOL to SOL with Jito's latest official daily JitoSOL/SOL r
 
 Use [JIP-31](https://forum.jito.network/t/jip-31-introduce-a-bam-early-adopter-subsidy-programme/909) for the earning-to-claim epoch convention, `https://storage.googleapis.com/jito-bam-boost/mainnet/<CLAIM_EPOCH>/merkle_tree.json` for published allocations, Jito's official [`jito-bam-boost-cli`](https://github.com/jito-foundation/jito-bam-boost-cli) for PDA and Claim Status semantics, and Jito's [`jitosol_sol_ratio`](https://www.jito.network/docs/jitosol/jitosol-liquid-staking/for-developers/stake-pool-api/#9-jitosolsol-ratio) API for historical exchange ratios.
 
-Report the completed epoch range, bond status, per-epoch revenue components, official Jito MEV commission, excluded SVT Jito inflows, BAM Boost allocated and claimed JitoSOL, historical allocated and claimed SOL equivalents, allocation and claim statuses, totals, missing rows, and assumptions. Use `validator-performance` for credits, rank, skip rate, and block production.
+Report the completed epoch range, bond status, per-epoch revenue components, official Jito MEV commission, excluded SVT Jito inflows, BAM Boost allocated and claimed JitoSOL, historical allocated and claimed SOL equivalents, allocation and claim statuses, vote transaction fees, VAT with its status and attribution convention, admission failures, totals, missing rows, and assumptions. Use `validator-performance` for credits, rank, skip rate, and block production.
 
 ## Local profiles and first use
 

@@ -1,6 +1,6 @@
 ---
 created: 2026-03-11
-last_updated: 2026-10-08
+last_updated: 2026-10-22
 ---
 
 # Solana Validator Skills
@@ -42,7 +42,7 @@ Requirements are Bun 1.3.3 and a mainnet RPC URL for chain queries: any http or 
 >
 > Window summary: total vote credits `34,522,622`, avg TVC `99.89%`, block production `20,048 / 20,048`, avg skip rate `0.00%`.
 
-`validator-revenue` goes further: per-epoch gross and net SOL from inflation and commission rewards, Jito MEV commission computed from Jito's official validator rewards, BAM Boost allocations valued at the historical JitoSOL/SOL rate, voting fees and Marinade bond costs, followed by a reconciliation table that shows every rate, timestamp and excluded inflow it used. Every helper also emits CSV and JSON.
+`validator-revenue` goes further: per-epoch gross and net SOL from inflation and commission rewards, Jito MEV commission computed from Jito's official validator rewards, BAM Boost allocations valued at the historical JitoSOL/SOL rate, vote transaction fees, Alpenglow VAT and Marinade bond costs, followed by a reconciliation table that shows every rate, timestamp and excluded inflow it used. Every helper also emits CSV and JSON.
 
 ## Skills
 

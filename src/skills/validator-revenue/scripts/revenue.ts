@@ -187,6 +187,9 @@ type SvtHistoryRow = {
   jitoReward: string | number;
   votingFee: string | number;
   votingCompensation: string | number;
+  // Alpenglow fields (from epoch 1064); null/absent until JPool publishes them.
+  vatDebit?: string | number | null;
+  admissionFailure?: boolean | null;
   tvCredits?: number;
   tvcRank?: number;
   leaderSlotsTotal?: number;
@@ -195,6 +198,21 @@ type SvtHistoryRow = {
   mevCommission?: number;
   totalStake?: string | number;
   skippedSlots?: string | number;
+};
+
+/**
+ * VAT source: `pre_alpenglow` (epoch < 1064, VAT is 0 by definition), `svt` (JPool/SVT
+ * `vatDebit`), `rpc_block` (VATDebit reward in the epoch's first confirmed block),
+ * `rpc_absent` (first block read but no VATDebit reward for this vote account; provisional),
+ * `missing` (no source; VAT unknown and NOT deducted; provisional).
+ */
+export type VatStatus = "pre_alpenglow" | "svt" | "rpc_block" | "rpc_absent" | "missing";
+export const PROVISIONAL_VAT_STATUSES: ReadonlySet<VatStatus | ""> = new Set(["rpc_absent", "missing"]);
+
+export type VatResult = {
+  lamports: bigint;
+  status: VatStatus;
+  block: number | null;
 };
 
 type RevenueRow = {
@@ -225,6 +243,10 @@ type RevenueRow = {
   votingCompensationSol: number;
   grossRevenueSol: number;
   votingFeeSol: number;
+  vatSol: number;
+  vatStatus: VatStatus | "";
+  vatBlock: number | null;
+  admissionFailure: boolean | null;
   marinadeBondPaymentSol: number;
   marinadeBondEstimatedPaymentSol: number;
   marinadeBondPaymentStatus: string;
@@ -247,6 +269,9 @@ const MARINADE_BONDS_BASE_URL = "https://validator-bonds-api.marinade.finance";
 
 const MARINADE_BOND_TYPES = ["bidding", "institutional"] as const;
 const BASIS_POINTS_DENOMINATOR = 10_000n;
+/** First mainnet epoch under Alpenglow (2026-10-21); VAT is 0 before it by definition. */
+export const ALPENGLOW_FIRST_EPOCH = 1064;
+const VAT_REWARD_TYPE = "VATDebit";
 
 function usage(): never {
   console.log(`Usage:
@@ -529,6 +554,98 @@ function firstSlotForEpoch(epoch: number, schedule: EpochSchedule): number {
   );
 }
 
+async function firstConfirmedBlock(rpcUrl: string, epoch: number, schedule: EpochSchedule): Promise<number> {
+  const firstSlot = firstSlotForEpoch(epoch, schedule);
+  const blocks = await rpc<number[]>(rpcUrl, "getBlocks", [
+    firstSlot,
+    firstSlot + 512,
+    { commitment: "finalized" },
+  ]);
+  const block = blocks[0];
+  if (block === undefined) {
+    throw new Error(`No confirmed block found near the start of epoch ${epoch}.`);
+  }
+  return block;
+}
+
+type BlockReward = { pubkey: string; lamports: number; rewardType?: string | null };
+
+/** Sum of VATDebit rewards (as a positive cost in lamports) for the vote account; null when none. */
+export function vatDebitFromRewards(rewards: unknown, voteAccount: string): bigint | null {
+  if (!Array.isArray(rewards)) throw new Error("Block rewards were not an array.");
+  const debits = (rewards as BlockReward[]).filter(
+    (reward) => reward?.pubkey === voteAccount && reward?.rewardType === VAT_REWARD_TYPE,
+  );
+  if (!debits.length) return null;
+  return debits.reduce((sum, reward) => {
+    if (!Number.isSafeInteger(reward.lamports)) throw new Error("Invalid VATDebit reward amount.");
+    return sum + BigInt(Math.abs(reward.lamports));
+  }, 0n);
+}
+
+/** SVT vatDebit in lamports as a positive cost; null when the feed has not published it. */
+export function vatDebitFromSvt(value: unknown): bigint | null {
+  if (value === null || value === undefined || value === "") return null;
+  let lamports: bigint;
+  if (typeof value === "number" && Number.isSafeInteger(value)) lamports = BigInt(value);
+  else if (typeof value === "string" && /^-?\d+$/.test(value.trim())) lamports = BigInt(value.trim());
+  else throw new Error(`JPool/SVT returned invalid vatDebit '${String(value)}'.`);
+  return lamports < 0n ? -lamports : lamports;
+}
+
+/**
+ * VAT is debited from the vote account at the start of epoch N to admit it for N+1 and is
+ * attributed to epoch N. Prefer SVT `vatDebit`; otherwise read the VATDebit reward from the
+ * first confirmed block of epoch N. A failed read is reported as `missing`, never as zero.
+ */
+export async function fetchVatDebits(
+  rpcUrl: string,
+  voteAccount: string,
+  svtVatByEpoch: Map<number, unknown>,
+  epochs: number[],
+): Promise<Map<number, VatResult>> {
+  const results = new Map<number, VatResult>();
+  const needRpc: number[] = [];
+  for (const epoch of epochs) {
+    if (epoch < ALPENGLOW_FIRST_EPOCH) {
+      results.set(epoch, { lamports: 0n, status: "pre_alpenglow", block: null });
+      continue;
+    }
+    const svt = vatDebitFromSvt(svtVatByEpoch.get(epoch));
+    if (svt !== null) results.set(epoch, { lamports: svt, status: "svt", block: null });
+    else needRpc.push(epoch);
+  }
+  if (!needRpc.length) return results;
+  let schedule: EpochSchedule | null = null;
+  try {
+    schedule = await rpc<EpochSchedule>(rpcUrl, "getEpochSchedule");
+  } catch {
+    schedule = null;
+  }
+  for (const epoch of needRpc) {
+    let result: VatResult = { lamports: 0n, status: "missing", block: null };
+    if (schedule) {
+      try {
+        const block = await firstConfirmedBlock(rpcUrl, epoch, schedule);
+        const payload = await rpc<{ rewards?: unknown } | null>(rpcUrl, "getBlock", [
+          block,
+          { transactionDetails: "none", rewards: true, maxSupportedTransactionVersion: 0, commitment: "finalized" },
+        ]);
+        if (payload && Array.isArray(payload.rewards)) {
+          const lamports = vatDebitFromRewards(payload.rewards, voteAccount);
+          result = lamports === null
+            ? { lamports: 0n, status: "rpc_absent", block }
+            : { lamports, status: "rpc_block", block };
+        }
+      } catch {
+        // Unavailable block history stays `missing`; it is reported, not assumed zero.
+      }
+    }
+    results.set(epoch, result);
+  }
+  return results;
+}
+
 async function fetchEpochBoundaryTimes(
   rpcUrl: string,
   epochs: number[],
@@ -542,24 +659,13 @@ async function fetchEpochBoundaryTimes(
     const batch = uniqueEpochs.slice(offset, offset + batchSize);
     const batchBoundaries = await Promise.all(
       batch.map(async (epoch): Promise<[number, number]> => {
-        const firstSlot = firstSlotForEpoch(epoch, schedule);
-        const blocks = await rpc<number[]>(rpcUrl, "getBlocks", [
-          firstSlot,
-          firstSlot + 512,
-          { commitment: "finalized" },
-        ]);
-        const firstConfirmedBlock = blocks[0];
-        if (firstConfirmedBlock === undefined) {
-          throw new Error(
-            `No confirmed block found near the start of epoch ${epoch}.`,
-          );
-        }
+        const block = await firstConfirmedBlock(rpcUrl, epoch, schedule);
         const blockTime = await rpc<number | null>(rpcUrl, "getBlockTime", [
-          firstConfirmedBlock,
+          block,
         ]);
         if (blockTime === null) {
           throw new Error(
-            `No block time found for first confirmed block ${firstConfirmedBlock} of epoch ${epoch}.`,
+            `No block time found for first confirmed block ${block} of epoch ${epoch}.`,
           );
         }
         return [epoch, blockTime];
@@ -758,9 +864,15 @@ async function collectRows(
       fetchBamBoostRewards(voteAccount, firstEpoch, lastEpoch, svtIdentityByEpoch),
       fetchJitoCommissionRewards(voteAccount, firstEpoch, lastEpoch),
     ]);
-  const [bamBoostConversions, bamBoostClaims] = await Promise.all([
+  const [bamBoostConversions, bamBoostClaims, vatDebits] = await Promise.all([
     fetchBamBoostConversions(opts.rpcUrl, bamBoostRewards),
     fetchBamBoostClaims(opts.rpcUrl, bamBoostRewards),
+    fetchVatDebits(
+      opts.rpcUrl,
+      voteAccount,
+      new Map(svtRows.map((row) => [row.epoch, row.vatDebit])),
+      svtRows.map((row) => row.epoch),
+    ),
   ]);
   const rows = svtRows.map((row): RevenueRow => {
     const votingReward = toLamports(row.votingReward);
@@ -773,6 +885,8 @@ async function collectRows(
     const jitoReward = jitoCommissionReward.operatorCommission;
     const votingCompensation = toLamports(row.votingCompensation);
     const votingFee = toLamports(row.votingFee);
+    const vat = vatDebits.get(row.epoch);
+    if (!vat) throw new Error(`Missing VAT result for epoch ${row.epoch}.`);
     const marinadeBondPayment =
       marinadeBondCosts.paymentsByEpoch.get(row.epoch) ?? 0n;
     const marinadeEstimate = marinadeBondCosts.estimatesByEpoch.get(row.epoch);
@@ -794,6 +908,7 @@ async function collectRows(
     const netRevenueSol =
       grossRevenueSol -
       lamportsToSol(votingFee) -
+      lamportsToSol(vat.lamports) -
       lamportsToSol(marinadeBondPayment) -
       (marinadeEstimate?.paymentSol ?? 0);
     const stakeSol = stakeLamportsToSol(row.totalStake);
@@ -845,6 +960,10 @@ async function collectRows(
       votingCompensationSol: roundSol(lamportsToSol(votingCompensation)),
       grossRevenueSol: roundSol(grossRevenueSol),
       votingFeeSol: roundSol(lamportsToSol(votingFee)),
+      vatSol: roundSol(lamportsToSol(vat.lamports)),
+      vatStatus: vat.status,
+      vatBlock: vat.block,
+      admissionFailure: typeof row.admissionFailure === "boolean" ? row.admissionFailure : null,
       marinadeBondPaymentSol: roundSol(lamportsToSol(marinadeBondPayment)),
       marinadeBondEstimatedPaymentSol: marinadeEstimate?.paymentSol ?? 0,
       marinadeBondPaymentStatus: marinadeEstimate ? "estimated"
@@ -890,6 +1009,9 @@ export function totals(rows: RevenueRow[]): RevenueRow {
       acc.votingCompensationSol += row.votingCompensationSol;
       acc.grossRevenueSol += row.grossRevenueSol;
       acc.votingFeeSol += row.votingFeeSol;
+      acc.vatSol += row.vatSol;
+      if (PROVISIONAL_VAT_STATUSES.has(row.vatStatus)) acc.vatStatus = row.vatStatus === "missing" || acc.vatStatus === "missing" ? "missing" : "rpc_absent";
+      if (row.admissionFailure) acc.admissionFailure = true;
       acc.marinadeBondPaymentSol += row.marinadeBondPaymentSol;
       acc.marinadeBondEstimatedPaymentSol += row.marinadeBondEstimatedPaymentSol;
       if (row.marinadeBondPaymentStatus === "estimated") acc.marinadeBondPaymentStatus = "estimated";
@@ -927,6 +1049,10 @@ export function totals(rows: RevenueRow[]): RevenueRow {
       votingCompensationSol: 0,
       grossRevenueSol: 0,
       votingFeeSol: 0,
+      vatSol: 0,
+      vatStatus: "" as VatStatus | "",
+      vatBlock: null,
+      admissionFailure: null as boolean | null,
       marinadeBondPaymentSol: 0,
       marinadeBondEstimatedPaymentSol: 0,
       marinadeBondPaymentStatus: "aggregate",
@@ -958,6 +1084,7 @@ export function totals(rows: RevenueRow[]): RevenueRow {
     votingCompensationSol: roundSol(total.votingCompensationSol),
     grossRevenueSol: roundSol(total.grossRevenueSol),
     votingFeeSol: roundSol(total.votingFeeSol),
+    vatSol: roundSol(total.vatSol),
     marinadeBondPaymentSol: roundSol(total.marinadeBondPaymentSol),
     marinadeBondEstimatedPaymentSol: roundSol(total.marinadeBondEstimatedPaymentSol),
     netRevenueSol: roundSol(total.netRevenueSol),
@@ -991,6 +1118,27 @@ export function bamBoostIdentityNote(rows: Array<Pick<RevenueRow, "epoch" | "bam
   return [`BAM Boost identity for epochs \`${ranges.join(", ")}\` came from that epoch's JPool/SVT history row because Trillium's validator history does not cover them. The row holds one identity per epoch, so an identity change inside an epoch is not represented.`];
 }
 
+const VAT_DEFINITION =
+  "VAT (Alpenglow validator admission ticket, from epoch 1064) is attributed to the epoch in which it is debited: the 0.8 SOL debited from the vote account at the start of epoch N (to admit it for epoch N+1) is a cost of epoch N. Source per epoch: JPool/SVT vatDebit when published, otherwise the vote account's VATDebit reward in the first confirmed block of that epoch; epochs before 1064 have no VAT. Vote transaction fees are TowerBFT vote costs and are partial in epoch 1064.";
+
+/** Loud notes for epochs whose VAT is unknown/unverified and for admission failures; empty when none. */
+export function vatNotes(rows: Array<Pick<RevenueRow, "epoch" | "vatStatus" | "vatBlock" | "admissionFailure">>): string[] {
+  const notes: string[] = [];
+  const missing = rows.filter((row) => row.vatStatus === "missing").map((row) => row.epoch);
+  const absent = rows.filter((row) => row.vatStatus === "rpc_absent");
+  if (missing.length) {
+    notes.push(`WARNING — PROVISIONAL: VAT is unknown for epoch(s) \`${missing.join(", ")}\` (JPool/SVT vatDebit not published and the first-block VATDebit reward could not be read). Their VAT is NOT deducted, so net revenue for these epochs and the totals is overstated by up to 0.8 SOL per epoch.`);
+  }
+  for (const row of absent) {
+    notes.push(`WARNING — PROVISIONAL: epoch ${row.epoch}'s first confirmed block (${row.vatBlock}) has no VATDebit reward for this vote account; VAT is shown as 0. Verify whether admission was skipped or the debit landed elsewhere.`);
+  }
+  const failures = rows.filter((row) => row.admissionFailure === true).map((row) => row.epoch);
+  if (failures.length) {
+    notes.push(`WARNING: JPool/SVT reports admissionFailure=true for epoch(s) \`${failures.join(", ")}\`; the vote account was not admitted for the following epoch, so expect missing rewards there.`);
+  }
+  return notes;
+}
+
 export function renderMarkdown(result: {
   voteAccount: string;
   currentEpoch: number;
@@ -1011,12 +1159,12 @@ export function renderMarkdown(result: {
   const jitoDefinition =
     "Jito operator revenue is calculated from Jito's official validator rewards as floor(mevRevenue × mevCommissionBps / 10,000). The raw JPool/SVT jitoReward inflow is retained for reconciliation only; any difference is excluded from gross and net because it can include returned Tip Distribution Account rent.";
   const revenueDefinition = result.hasMarinadeBond
-    ? "SOL revenue definition used: gross = votingReward + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - votingFee - reported Marinade bond payment - estimated Marinade payment. Reported payments sum ValidatorBond-funded protected-events. When an epoch has no published ValidatorBond-funded Bidding events globally, bidding-bond costs are estimated from that epoch's SAM effectiveBid × marinadeActivatedStakeSol / 1000. Estimates use auction snapshots, exclude additional penalties/PSR and can differ from final settlement. no_record means no matching published payment, not verified zero liability; global publication can be partial. This excludes other off-chain payments, infrastructure costs, and other operating costs."
-    : "SOL revenue definition used: gross = votingReward + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - votingFee. No Marinade validator bond was found, so bond payments are not included. This excludes off-chain payments, infrastructure costs, and other operating costs.";
+    ? "SOL revenue definition used: gross = votingReward + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - vote transaction fees (TowerBFT; partial in 1064) - VAT - reported Marinade bond payment - estimated Marinade payment. Reported payments sum ValidatorBond-funded protected-events. When an epoch has no published ValidatorBond-funded Bidding events globally, bidding-bond costs are estimated from that epoch's SAM effectiveBid × marinadeActivatedStakeSol / 1000. Estimates use auction snapshots, exclude additional penalties/PSR and can differ from final settlement. no_record means no matching published payment, not verified zero liability; global publication can be partial. This excludes other off-chain payments, infrastructure costs, and other operating costs."
+    : "SOL revenue definition used: gross = votingReward + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - vote transaction fees (TowerBFT; partial in 1064) - VAT. No Marinade validator bond was found, so bond payments are not included. This excludes off-chain payments, infrastructure costs, and other operating costs.";
   const bondHeader = result.hasMarinadeBond ? " Marinade Bond Payment |" : "";
   const bondDivider = result.hasMarinadeBond ? "---:|" : "";
-  const tableHeader = `| Epoch | Stake SOL | Voting Reward | Commission | Jito Commission | BAM Boost SOL Eq. | Voting Comp | Gross SOL | Voting Fee |${bondHeader} Net SOL | Blocks |`;
-  const tableDivider = `|---:|---:|---:|---:|---:|---:|---:|---:|---:|${bondDivider}---:|---:|`;
+  const tableHeader = `| Epoch | Stake SOL | Voting Reward | Commission | Jito Commission | BAM Boost SOL Eq. | Voting Comp | Gross SOL | Vote Tx Fees | VAT |${bondHeader} Net SOL | Blocks |`;
+  const tableDivider = `|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|${bondDivider}---:|---:|`;
   const detailHeader =
     "| Epoch | Jito Commission bps | Excluded SVT Jito Inflow | BAM Claim Epoch | BAM Allocated JitoSOL | JitoSOL/SOL | Rate Time (UTC) | Rate Time (local) | BAM Claimed SOL Eq. | BAM Status | Pre-Comp Lamports / 1k Stake |";
   const detailDivider = "|---:|---:|---:|---:|---:|---:|:---|:---|---:|:---|---:|";
@@ -1025,6 +1173,8 @@ export function renderMarkdown(result: {
     "",
     ...unavailableEpochsNote(result.requestedFirstEpoch ?? result.firstEpoch, result.firstEpoch, result.lastEpoch).flatMap((note) => [note, ""]),
     revenueDefinition,
+    "",
+    VAT_DEFINITION,
     "",
     jitoDefinition,
     "",
@@ -1041,10 +1191,14 @@ export function renderMarkdown(result: {
         ? ` ${fmtSol(row.marinadeBondPaymentSol)} reported + ${fmtSol(row.marinadeBondEstimatedPaymentSol)} estimated |`
         : ` ${fmtSol(row.marinadeBondPaymentSol)} (${row.marinadeBondPaymentStatus}) |`
       : "";
+    const vatCell = PROVISIONAL_VAT_STATUSES.has(row.vatStatus)
+      ? `${fmtSol(row.vatSol)} (${row.vatStatus}, PROVISIONAL)`
+      : row.vatStatus === "pre_alpenglow" ? fmtSol(row.vatSol) : `${fmtSol(row.vatSol)} (${row.vatStatus})`;
+    const admission = row.admissionFailure ? " ADMISSION FAILURE" : "";
     const jitoCommission =
       row.jitoCommissionBps === null ? `${fmtSol(row.jitoRewardSol)} (${row.jitoRewardStatus})` : fmtSol(row.jitoRewardSol);
     lines.push(
-      `| ${row.epoch} | ${fmtInt(row.stakeSol)} | ${fmtSol(row.votingRewardSol)} | ${fmtSol(row.commissionRewardSol)} | ${jitoCommission} | ${fmtSol(row.bamBoostAllocatedSolEquivalent)} | ${fmtSol(row.votingCompensationSol)} | ${fmtSol(row.grossRevenueSol)} | ${fmtSol(row.votingFeeSol)} |${bondCell} ${fmtSol(row.netRevenueSol)} | ${row.blocksProduced}/${row.leaderSlots} |`,
+      `| ${row.epoch} | ${fmtInt(row.stakeSol)} | ${fmtSol(row.votingRewardSol)} | ${fmtSol(row.commissionRewardSol)} | ${jitoCommission} | ${fmtSol(row.bamBoostAllocatedSolEquivalent)} | ${fmtSol(row.votingCompensationSol)} | ${fmtSol(row.grossRevenueSol)} | ${fmtSol(row.votingFeeSol)} | ${vatCell}${admission} |${bondCell} ${fmtSol(row.netRevenueSol)} | ${row.blocksProduced}/${row.leaderSlots} |`,
     );
     const bamRate = row.bamBoostJitoSolToSolRate === null ? "-" : row.bamBoostJitoSolToSolRate.toFixed(9);
     detailLines.push(
@@ -1062,6 +1216,7 @@ export function renderMarkdown(result: {
   );
 
   lines.push(...bamBoostIdentityNote(result.rows).flatMap((note) => ["", note]));
+  lines.push(...vatNotes(result.rows).flatMap((note) => ["", note]));
 
   for (const row of result.rows.filter(row => row.marinadeBondPaymentStatus === "estimated")) {
     lines.push("", `Epoch ${row.epoch} Marinade estimate: ${row.marinadeActivatedStakeSol} SOL activated stake × effective bid ${row.marinadeEffectiveBid} (SOL per 1,000 SOL) / 1,000 = ${row.marinadeBondEstimatedPaymentSol} SOL. Source: ${row.marinadeEstimateSource}`);
@@ -1079,7 +1234,8 @@ export function renderMarkdown(result: {
     `- BAM Boost claimed: \`${fmtTotal(total.bamBoostClaimedJitoSol)} JitoSOL\` = \`${fmtTotal(total.bamBoostClaimedSolEquivalent)} SOL equivalent\` at the same historical ratios`,
     `- Voting compensation: \`${fmtTotal(total.votingCompensationSol)} SOL\``,
     `- Gross revenue: \`${fmtTotal(total.grossRevenueSol)} SOL\``,
-    `- Voting fee: \`${fmtTotal(total.votingFeeSol)} SOL\``,
+    `- Vote transaction fees (TowerBFT; partial in 1064): \`${fmtTotal(total.votingFeeSol)} SOL\``,
+    `- VAT (attributed to the debit epoch)${PROVISIONAL_VAT_STATUSES.has(total.vatStatus) ? " (PROVISIONAL: unknown/unverified VAT epochs listed above)" : ""}: \`${fmtTotal(total.vatSol)} SOL\``,
   );
 
   if (result.hasMarinadeBond) {
@@ -1090,7 +1246,10 @@ export function renderMarkdown(result: {
   }
 
   lines.push(
-    `- Net revenue${total.marinadeBondPaymentStatus === "estimated" ? " (includes estimated Marinade costs)" : ""}: \`${fmtTotal(total.netRevenueSol)} SOL\``,
+    `- Net revenue${[
+      total.marinadeBondPaymentStatus === "estimated" ? " (includes estimated Marinade costs)" : "",
+      PROVISIONAL_VAT_STATUSES.has(total.vatStatus) ? " (PROVISIONAL: VAT missing or unverified for some epochs)" : "",
+    ].join("")}: \`${fmtTotal(total.netRevenueSol)} SOL\``,
     `- Lamports per 1k stake before voting comp (sum across window): \`${fmtInt(total.preCompLamportsPerKiloStake)}\``,
     `- Blocks produced: \`${fmtInt(total.blocksProduced)} / ${fmtInt(total.leaderSlots)}\` leader slots`,
   );
@@ -1127,6 +1286,10 @@ export function renderCsv(rows: RevenueRow[], includeMarinadeBond: boolean): str
     "voting_compensation_sol",
     "gross_revenue_sol",
     "voting_fee_sol",
+    "vat_sol",
+    "vat_status",
+    "vat_block",
+    "admission_failure",
     ...(includeMarinadeBond ? ["marinade_bond_payment_sol", "marinade_bond_estimated_payment_sol", "marinade_bond_payment_status", "marinade_effective_bid", "marinade_activated_stake_sol", "marinade_estimate_source"] : []),
     "net_revenue_sol",
     "lamports_per_kilo_stake_before_voting_comp",
@@ -1163,6 +1326,10 @@ export function renderCsv(rows: RevenueRow[], includeMarinadeBond: boolean): str
       row.votingCompensationSol.toFixed(9),
       row.grossRevenueSol.toFixed(9),
       row.votingFeeSol.toFixed(9),
+      row.vatSol.toFixed(9),
+      row.vatStatus,
+      row.vatBlock ?? "",
+      row.admissionFailure ?? "",
       ...(includeMarinadeBond ? [row.marinadeBondPaymentSol.toFixed(9), row.marinadeBondEstimatedPaymentSol.toFixed(9), row.marinadeBondPaymentStatus, row.marinadeEffectiveBid ?? "", row.marinadeActivatedStakeSol ?? "", row.marinadeEstimateSource] : []),
       row.netRevenueSol.toFixed(9),
       row.preCompLamportsPerKiloStake,
@@ -1182,12 +1349,18 @@ async function main() {
   opts.voteAccount = operator.voteAccount;
   const voteAccount = operator.voteAccount;
   const result = await collectRows(opts, voteAccount);
-  const payload = { voteAccount, ...result, totals: totals(result.rows) };
+  const payload = {
+    voteAccount,
+    ...result,
+    totals: totals(result.rows),
+    vatAttribution: "VAT debited at the start of epoch N (admission for N+1) is attributed to epoch N.",
+    vatNotes: vatNotes(result.rows),
+  };
 
   if (opts.format === "json") console.log(JSON.stringify(payload, null, 2));
   else if (opts.format === "csv") {
     // CSV has no place for scope notes; keep them off stdout.
-    for (const note of [...unavailableEpochsNote(result.requestedFirstEpoch, result.firstEpoch, result.lastEpoch), ...bamBoostIdentityNote(result.rows)]) console.error(note);
+    for (const note of [...unavailableEpochsNote(result.requestedFirstEpoch, result.firstEpoch, result.lastEpoch), ...bamBoostIdentityNote(result.rows), ...vatNotes(result.rows)]) console.error(note);
     console.log(renderCsv(result.rows, result.hasMarinadeBond));
   } else console.log(renderMarkdown({ voteAccount, ...result }));
 }
