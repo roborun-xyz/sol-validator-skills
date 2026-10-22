@@ -12,17 +12,24 @@ import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createRpcContext, redactRpc } from "../../shared/operator-config";
 import { pollReadOnly } from "../../shared/poll";
+import { PublicKey, SystemProgram, Transaction, VoteProgram } from "@solana/web3.js";
 import {
   assertFundingFloor,
+  assertVoteReserve,
+  calculateTopUp,
+  calculateVoteExcess,
+  DEFAULT_VOTE_RESERVE,
   IDENTITY_HARD_FLOOR as IDENTITY_HARD_FLOOR_LAMPORTS,
   IDENTITY_EXECUTION_RESERVE as IDENTITY_EXECUTION_RESERVE_LAMPORTS,
+  parseSolAmount,
   type Plan,
 } from "./plan";
 
 const DEFAULT_APPROVAL_DRIFT_LAMPORTS = 100_000_000n;
 const MINIMUM_FEE_PAYER_LAMPORTS = 1_000_000n;
-// Vote fees the identity may pay between the preflight read and a later one. It is far
-// below the 1 SOL vote threshold, so it cannot hide a withdrawal that is not yet visible.
+// Under Alpenglow the identity no longer pays vote fees, but other identity-signed
+// operations may still debit it between reads. The allowance is far below the 0.1 SOL
+// vote-withdrawal threshold, so it cannot hide a withdrawal that is not yet visible.
 const IDENTITY_FEE_DRIFT_ALLOWANCE_LAMPORTS = 10_000_000n;
 const EXPECTED_BONDS_PROGRAM = "vBoNdEvzMrSai7is21XgVYik65mqtaKXuSdMBJ1xkW4";
 
@@ -30,6 +37,8 @@ const repoRoot = resolve(import.meta.dir, "../../../..");
 const plannerPath = resolve(import.meta.dir, "plan.ts");
 
 type VoteAction = Plan["voteAction"];
+
+const TOP_UP_ACTIONS: ReadonlySet<VoteAction> = new Set(["top-up", "top-up-partial"]);
 
 type BondJson = {
   programId: string;
@@ -63,6 +72,9 @@ type CliArgs = {
   operatorApproved: boolean;
   approvalId?: string;
   approvedCeilingLamports?: bigint;
+  approvedTopUpCeilingLamports?: bigint;
+  acceptVoteShortfall: boolean;
+  voteReserveLamports: bigint;
 };
 
 export type ApprovalFingerprintInput = {
@@ -74,7 +86,10 @@ export type ApprovalFingerprintInput = {
   withdrawerSigner: string;
   feePayerSigner: string;
   voteAction: VoteAction;
+  voteReserveLamports: string;
+  willTopUpVote: boolean;
   willFundBond: boolean;
+  approvedTopUpCeilingLamports: string;
   approvedCeilingLamports: string;
 };
 
@@ -87,6 +102,7 @@ type Preflight = {
   feePayerBalanceLamports: bigint;
   validatorBondsVersion: string;
   approvedCeilingLamports: bigint;
+  approvedTopUpCeilingLamports: bigint;
   approvalId: string;
 };
 
@@ -131,10 +147,10 @@ function usage(code = 2): never {
   console.error(
     [
       "Read-only preflight:",
-      "  bun execute.ts --vote-account <PUBKEY> --identity <PUBKEY> --identity-keypair <PATH> --withdrawer-keypair <PATH> --fee-payer-keypair <PATH> [--rpc URL] [--config PATH] [--profile NAME]",
+      "  bun execute.ts --vote-account <PUBKEY> --identity <PUBKEY> --identity-keypair <PATH> --withdrawer-keypair <PATH> --fee-payer-keypair <PATH> [--vote-reserve-sol SOL (default 3)] [--rpc URL] [--config PATH] [--profile NAME]",
       "",
       "Execute only after explicit operator approval:",
-      "  bun execute.ts ... --execute --operator-approved --approval-id <ID> --approved-ceiling-lamports <LAMPORTS>",
+      "  bun execute.ts ... --execute --operator-approved --approval-id <ID> --approved-ceiling-lamports <LAMPORTS> --approved-top-up-ceiling-lamports <LAMPORTS> [--accept-vote-shortfall]",
     ].join("\n"),
   );
   process.exit(code);
@@ -151,8 +167,8 @@ function requiredArg(name: string): string {
 function parseArgs(): CliArgs {
   const raw = process.argv.slice(2);
   if (raw.includes("--help")) usage(0);
-  const values = new Set(["--vote-account", "--identity", "--identity-keypair", "--withdrawer-keypair", "--fee-payer-keypair", "--approval-id", "--approved-ceiling-lamports", "--rpc", "--config", "--profile"]);
-  const flags = new Set(["--execute", "--operator-approved"]);
+  const values = new Set(["--vote-account", "--identity", "--identity-keypair", "--withdrawer-keypair", "--fee-payer-keypair", "--vote-reserve-sol", "--approval-id", "--approved-ceiling-lamports", "--approved-top-up-ceiling-lamports", "--rpc", "--config", "--profile"]);
+  const flags = new Set(["--execute", "--operator-approved", "--accept-vote-shortfall"]);
   const seen = new Set<string>();
   for (let i = 0; i < raw.length; i++) {
     const arg = raw[i];
@@ -166,6 +182,10 @@ function parseArgs(): CliArgs {
   const execute = process.argv.includes("--execute");
   const approvedCeiling = readArg("--approved-ceiling-lamports");
   if (approvedCeiling && !/^\d+$/.test(approvedCeiling)) usage();
+  const approvedTopUpCeiling = readArg("--approved-top-up-ceiling-lamports");
+  if (approvedTopUpCeiling && !/^\d+$/.test(approvedTopUpCeiling)) usage();
+  const voteReserveSol = readArg("--vote-reserve-sol");
+  const voteReserveLamports = voteReserveSol === undefined ? DEFAULT_VOTE_RESERVE : parseSolAmount(voteReserveSol, "--vote-reserve-sol");
   return {
     voteAccount: requiredArg("--vote-account"),
     identity: requiredArg("--identity"),
@@ -176,6 +196,9 @@ function parseArgs(): CliArgs {
     operatorApproved: process.argv.includes("--operator-approved"),
     approvalId: readArg("--approval-id"),
     approvedCeilingLamports: approvedCeiling ? BigInt(approvedCeiling) : undefined,
+    approvedTopUpCeilingLamports: approvedTopUpCeiling ? BigInt(approvedTopUpCeiling) : undefined,
+    acceptVoteShortfall: process.argv.includes("--accept-vote-shortfall"),
+    voteReserveLamports,
   };
 }
 
@@ -221,6 +244,8 @@ async function getPlan(args: CliArgs): Promise<Plan> {
       args.voteAccount,
       "--identity",
       args.identity,
+      "--vote-reserve-sol",
+      formatSol(args.voteReserveLamports),
       "--json",
       "--rpc",
       await requireRpcUrl(),
@@ -305,12 +330,15 @@ function makeApprovalInput(
     withdrawerSigner: preflight.withdrawerSigner,
     feePayerSigner: preflight.feePayerSigner,
     voteAction: preflight.plan.voteAction,
+    voteReserveLamports: preflight.plan.voteReserveLamports,
+    willTopUpVote: BigInt(preflight.plan.voteTopUpLamports) > 0n,
     willFundBond: BigInt(preflight.plan.bondFundLamports) > 0n,
+    approvedTopUpCeilingLamports: preflight.approvedTopUpCeilingLamports.toString(),
     approvedCeilingLamports: preflight.approvedCeilingLamports.toString(),
   };
 }
 
-async function runPreflight(args: CliArgs, ceilingOverride?: bigint): Promise<Preflight> {
+async function runPreflight(args: CliArgs, ceilingOverride?: bigint, topUpCeilingOverride?: bigint): Promise<Preflight> {
   await requireRpcUrl();
   const [plan, bond, identitySigner, withdrawerSigner, feePayerSigner, tooling] = await Promise.all([
     getPlan(args),
@@ -324,6 +352,9 @@ async function runPreflight(args: CliArgs, ceilingOverride?: bigint): Promise<Pr
   if (plan.voteAccount !== args.voteAccount || plan.identityAccount !== args.identity) {
     throw new Error("planner account mismatch");
   }
+  if (plan.voteReserveLamports !== args.voteReserveLamports.toString()) throw new Error("planner vote reserve mismatch");
+  // Recheck even if a substituted or older planner accepted an unsafe reserve.
+  assertVoteReserve(BigInt(plan.voteReserveLamports), BigInt(plan.voteRentExemptLamports));
   if (identitySigner !== args.identity) throw new Error("identity signer does not match the live identity");
   if (!bond.voteAccount?.authorizedWithdrawer) throw new Error("bond output omitted the vote authorized withdrawer");
   if (withdrawerSigner !== bond.voteAccount.authorizedWithdrawer) {
@@ -337,11 +368,26 @@ async function runPreflight(args: CliArgs, ceilingOverride?: bigint): Promise<Pr
     );
   }
   const proposed = BigInt(plan.bondFundLamports);
+  const proposedTopUp = BigInt(plan.voteTopUpLamports);
   // Recheck even if a substituted or older planner returned an impossible sweep.
-  assertFundingFloor(BigInt(plan.identityBalanceLamports) + BigInt(plan.voteTransferLamports), proposed);
+  if (TOP_UP_ACTIONS.has(plan.voteAction) && BigInt(plan.voteTransferLamports) !== 0n) {
+    throw new Error("planner combined a vote top-up with a vote withdrawal");
+  }
+  if (proposedTopUp > 0n && BigInt(plan.identityBalanceLamports) - proposedTopUp < IDENTITY_EXECUTION_RESERVE_LAMPORTS) {
+    throw new Error("proposed vote top-up would put the identity below its execution reserve");
+  }
+  assertFundingFloor(
+    BigInt(plan.identityBalanceLamports) + BigInt(plan.voteTransferLamports) - proposedTopUp,
+    proposed,
+  );
   const approvedCeilingLamports = ceilingOverride ?? proposed + DEFAULT_APPROVAL_DRIFT_LAMPORTS;
   if (proposed > approvedCeilingLamports) {
     throw new Error(`proposed funding ${proposed} exceeds approved ceiling ${approvedCeilingLamports}`);
+  }
+  const approvedTopUpCeilingLamports =
+    topUpCeilingOverride ?? (proposedTopUp > 0n ? proposedTopUp + DEFAULT_APPROVAL_DRIFT_LAMPORTS : 0n);
+  if (proposedTopUp > approvedTopUpCeilingLamports) {
+    throw new Error(`proposed vote top-up ${proposedTopUp} exceeds approved top-up ceiling ${approvedTopUpCeilingLamports}`);
   }
   const withoutId: Omit<Preflight, "approvalId"> = {
     plan,
@@ -352,6 +398,7 @@ async function runPreflight(args: CliArgs, ceilingOverride?: bigint): Promise<Pr
     feePayerBalanceLamports,
     validatorBondsVersion: tooling.version,
     approvedCeilingLamports,
+    approvedTopUpCeilingLamports,
   };
   return { ...withoutId, approvalId: approvalFingerprint(makeApprovalInput(args, withoutId)) };
 }
@@ -380,6 +427,10 @@ function publicPreflight(preflight: Preflight, args: CliArgs) {
       voteSol: preflight.plan.voteBalanceSol,
       voteRentLamports: preflight.plan.voteRentExemptLamports,
       voteRentSol: preflight.plan.voteRentExemptSol,
+      voteReserveLamports: preflight.plan.voteReserveLamports,
+      voteReserveSol: preflight.plan.voteReserveSol,
+      minimumVoteReserveLamports: preflight.plan.minimumVoteReserveLamports,
+      minimumVoteReserveSol: preflight.plan.minimumVoteReserveSol,
       identityLamports: preflight.plan.identityBalanceLamports,
       identitySol: preflight.plan.identityBalanceSol,
       feePayerLamports: preflight.feePayerBalanceLamports.toString(),
@@ -388,6 +439,10 @@ function publicPreflight(preflight: Preflight, args: CliArgs) {
     },
     action: {
       vote: preflight.plan.voteAction,
+      voteTopUpLamports: preflight.plan.voteTopUpLamports,
+      voteTopUpSol: preflight.plan.voteTopUpSol,
+      voteShortfallLamports: preflight.plan.voteShortfallLamports,
+      voteShortfallSol: preflight.plan.voteShortfallSol,
       voteTransferLamports: preflight.plan.voteTransferLamports,
       voteTransferSol: preflight.plan.voteTransferSol,
       identity: preflight.plan.identityAction,
@@ -403,13 +458,21 @@ function publicPreflight(preflight: Preflight, args: CliArgs) {
       amountToWithdraw: preflight.bond.amountToWithdraw,
     },
     approval: {
-      required: BigInt(preflight.plan.bondFundLamports) > 0n,
+      required: BigInt(preflight.plan.bondFundLamports) > 0n || BigInt(preflight.plan.voteTopUpLamports) > 0n,
       approvalId: preflight.approvalId,
       approvedCeilingLamports: preflight.approvedCeilingLamports.toString(),
       approvedCeilingSol: formatSol(preflight.approvedCeilingLamports),
+      approvedTopUpCeilingLamports: preflight.approvedTopUpCeilingLamports.toString(),
+      approvedTopUpCeilingSol: formatSol(preflight.approvedTopUpCeilingLamports),
+      requiresShortfallAcceptance: preflight.plan.voteAction === "top-up-partial",
       reserveLamports: IDENTITY_EXECUTION_RESERVE_LAMPORTS.toString(),
       reserveSol: formatSol(IDENTITY_EXECUTION_RESERVE_LAMPORTS),
-      warning: "Vote withdrawal can finalize even if later bond funding fails.",
+      warnings: [
+        "Each step finalizes independently: a vote top-up or withdrawal can finalize even if later bond funding fails.",
+        ...(BigInt(preflight.plan.voteShortfallLamports) > 0n
+          ? [`Vote account stays ${preflight.plan.voteShortfallSol} SOL below its reserve; under Alpenglow it is not admitted for an epoch if it cannot pay rent exemption plus the 0.8 SOL VAT at that epoch start.`]
+          : []),
+      ],
     },
   };
 }
@@ -421,20 +484,91 @@ export function parseSolLamports(value: string): bigint {
   return BigInt(match[1]) * LAMPORTS_PER_SOL + BigInt(fraction || "0");
 }
 
+/**
+ * Bond funding after the vote step: an identity that started above its execution reserve
+ * contributes everything above that reserve (which already reflects any top-up and the
+ * withdrawal); otherwise only the lamports actually withdrawn from the vote account.
+ */
 export function calculateFundingAfterVote(
-  initial: Pick<Plan, "identityAction" | "voteTransferLamports">,
+  initial: Pick<Plan, "identityAction">,
   currentIdentityLamports: bigint,
+  withdrawnLamports: bigint,
 ): bigint {
   if (initial.identityAction === "fund-bond") {
     return currentIdentityLamports > IDENTITY_EXECUTION_RESERVE_LAMPORTS
       ? currentIdentityLamports - IDENTITY_EXECUTION_RESERVE_LAMPORTS
       : 0n;
   }
-  return BigInt(initial.voteTransferLamports);
+  return withdrawnLamports;
 }
 
-export function parseWithdrawalSignature(output: string): string | undefined {
+/** Explicit withdrawal at execution time: the current excess, never above the approved plan amount. */
+export function calculateExecutionWithdrawal(
+  currentVoteLamports: bigint,
+  voteReserveLamports: bigint,
+  plannedLamports: bigint,
+): bigint {
+  const excess = calculateVoteExcess(currentVoteLamports, voteReserveLamports);
+  return excess < plannedLamports ? excess : plannedLamports;
+}
+
+/** Post-withdrawal invariant: the vote account must keep at least its reserve. */
+export function assertVoteAtOrAboveReserve(voteLamports: bigint, voteReserveLamports: bigint, when: string): void {
+  if (voteLamports < voteReserveLamports) {
+    throw new Error(`vote balance ${voteLamports} ${when} is below the vote reserve ${voteReserveLamports}`);
+  }
+}
+
+/** Solana CLI amount argument: always an explicit lamport-exact SOL decimal, never `ALL`. */
+export function explicitSolAmount(lamports: bigint): string {
+  if (lamports <= 0n) throw new Error(`refusing a non-positive transfer amount: ${lamports}`);
+  return formatSol(lamports);
+}
+
+export function parseCliSignature(output: string): string | undefined {
   return output.match(/Signature:\s*([1-9A-HJ-NP-Za-km-z]{80,90})/)?.[1];
+}
+export const parseWithdrawalSignature = parseCliSignature;
+
+/** Unsigned System transfer identity -> vote account; depositing needs no vote authority. */
+export function buildTopUpTransaction(feePayer: string, identity: string, vote: string, lamports: bigint): Transaction {
+  const transaction = new Transaction().add(
+    SystemProgram.transfer({ fromPubkey: new PublicKey(identity), toPubkey: new PublicKey(vote), lamports }),
+  );
+  transaction.feePayer = new PublicKey(feePayer);
+  return transaction;
+}
+
+/** Unsigned vote withdrawal of an explicit lamport amount to the identity. */
+export function buildVoteWithdrawTransaction(
+  feePayer: string,
+  vote: string,
+  withdrawer: string,
+  identity: string,
+  lamports: bigint,
+): Transaction {
+  if (lamports <= 0n || lamports > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error(`invalid withdrawal amount ${lamports}`);
+  const transaction = VoteProgram.withdraw({
+    votePubkey: new PublicKey(vote),
+    authorizedWithdrawerPubkey: new PublicKey(withdrawer),
+    lamports: Number(lamports),
+    toPubkey: new PublicKey(identity),
+  });
+  transaction.feePayer = new PublicKey(feePayer);
+  return transaction;
+}
+
+/** Read-only RPC simulation of an unsigned transaction before the CLI signs and sends it. */
+async function simulateUnsigned(transaction: Transaction, label: string): Promise<void> {
+  transaction.recentBlockhash = PublicKey.default.toBase58(); // Replaced by the RPC node.
+  const wire = transaction.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64");
+  const result = await rpc<{ value: { err: unknown; logs?: string[] | null } }>("simulateTransaction", [
+    wire,
+    { encoding: "base64", sigVerify: false, replaceRecentBlockhash: true, commitment: "finalized" },
+  ]);
+  if (result.value.err !== null) {
+    throw new Error(`${label} simulation failed: ${JSON.stringify(result.value.err)}; nothing was submitted`);
+  }
 }
 
 async function confirmFinalized(signature: string): Promise<void> {
@@ -554,97 +688,227 @@ async function runFundingCommand(args: CliArgs, amountSol: string, simulate: boo
   );
 }
 
+async function readVoteAndIdentity(args: CliArgs): Promise<[bigint, bigint]> {
+  const [vote, identity] = await Promise.all([getBalance(args.voteAccount), getBalance(args.identity)]);
+  return [vote, identity];
+}
+
 async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> {
-  if (!args.operatorApproved || !args.approvalId || args.approvedCeilingLamports === undefined) {
+  if (
+    !args.operatorApproved ||
+    !args.approvalId ||
+    args.approvedCeilingLamports === undefined ||
+    args.approvedTopUpCeilingLamports === undefined
+  ) {
     throw new Error(
-      "execution requires --operator-approved, --approval-id, and --approved-ceiling-lamports after explicit operator confirmation",
+      "execution requires --operator-approved, --approval-id, --approved-ceiling-lamports and --approved-top-up-ceiling-lamports after explicit operator confirmation",
     );
   }
-  const preflight = await runPreflight(args, args.approvedCeilingLamports);
+  const preflight = await runPreflight(args, args.approvedCeilingLamports, args.approvedTopUpCeilingLamports);
   if (preflight.approvalId !== args.approvalId) {
     throw new Error(
       `approval mismatch: expected ${args.approvalId}, current non-balance state produces ${preflight.approvalId}`,
     );
   }
+  if (preflight.plan.voteAction === "top-up-partial" && !args.acceptVoteShortfall) {
+    throw new Error(
+      `identity surplus covers only part of the vote reserve deficit (shortfall ${preflight.plan.voteShortfallSol} SOL); a partial top-up requires --accept-vote-shortfall after explicit operator approval`,
+    );
+  }
   stage("approved-state-rechecked", {
     checkedAtUtc: preflight.plan.checkedAtUtc,
+    voteAction: preflight.plan.voteAction,
+    proposedVoteTopUpLamports: preflight.plan.voteTopUpLamports,
     proposedBondFundLamports: preflight.plan.bondFundLamports,
+    approvedTopUpCeilingLamports: preflight.approvedTopUpCeilingLamports.toString(),
     approvedCeilingLamports: preflight.approvedCeilingLamports.toString(),
   });
 
   const initialPlan = preflight.plan;
-  const voteRentLamports = BigInt(initialPlan.voteRentExemptLamports);
-  let currentIdentityLamports = BigInt(initialPlan.identityBalanceLamports);
-  let currentBond = preflight.bond;
+  const voteReserveLamports = BigInt(initialPlan.voteReserveLamports);
+  const skipped: string[] = [];
+  const warnings: string[] = [];
+  let voteTopUpSignature: string | undefined;
   let voteWithdrawalSignature: string | undefined;
+  let toppedUpLamports = 0n;
+  let withdrawnLamports = 0n;
 
-  if (initialPlan.voteAction === "withdraw-all") {
-    const withdrawal = await runCommand(
-      [
-        "solana",
-        "withdraw-from-vote-account",
-        "-u",
-        await requireRpcUrl(),
-        "--commitment",
-        "finalized",
-        "--fee-payer",
-        args.feePayerKeypair,
-        "--authorized-withdrawer",
-        args.withdrawerKeypair,
-        args.voteAccount,
-        args.identity,
-        "ALL",
-      ],
-      "vote-account withdrawal",
-    );
-    voteWithdrawalSignature = parseWithdrawalSignature(`${withdrawal.stdout}\n${withdrawal.stderr}`);
-    if (!voteWithdrawalSignature) throw new Error("vote withdrawal succeeded but its signature was not printed");
-    await confirmFinalized(voteWithdrawalSignature);
-    stage("vote-withdrawal-finalized", { signature: voteWithdrawalSignature });
-
-    // Wait within a fixed bound for the finalized withdrawal to be visible in both balances
-    // it changes. The identity read sizes the bond funding, so a node that still serves
-    // the pre-withdrawal identity balance must not be accepted either.
-    const identityWithWithdrawal =
-      currentIdentityLamports + BigInt(initialPlan.voteTransferLamports) - IDENTITY_FEE_DRIFT_ALLOWANCE_LAMPORTS;
-    let [voteLamports, identityLamports] = [BigInt(initialPlan.voteBalanceLamports), currentIdentityLamports];
-    const visible = await pollReadOnly(async () => {
-      [voteLamports, identityLamports] = await Promise.all([getBalance(args.voteAccount), getBalance(args.identity)]);
-      return voteLamports === voteRentLamports && identityLamports >= identityWithWithdrawal ? true : undefined;
-    });
-    if (voteLamports !== voteRentLamports) {
-      throw new Error(`vote balance ${voteLamports} does not equal rent reserve ${voteRentLamports}`);
-    }
-    if (!visible) {
-      throw new Error(
-        `identity balance ${identityLamports} does not yet include the withdrawn ${initialPlan.voteTransferLamports} lamports; no bond funding was submitted`,
+  // Step 1: restore the vote reserve from identity surplus before anything else.
+  if (TOP_UP_ACTIONS.has(initialPlan.voteAction)) {
+    const [voteBefore, identityBefore] = await readVoteAndIdentity(args);
+    const { topUp, shortfall } = calculateTopUp(voteBefore, voteReserveLamports, identityBefore);
+    if (topUp <= 0n) {
+      skipped.push(
+        voteBefore >= voteReserveLamports
+          ? "vote top-up: vote balance already reached its reserve"
+          : "vote top-up: no identity surplus above the execution reserve",
       );
+      stage("vote-top-up-skipped", { voteLamports: voteBefore.toString(), identityLamports: identityBefore.toString() });
+    } else {
+      if (topUp > preflight.approvedTopUpCeilingLamports) {
+        throw new Error(
+          `recalculated vote top-up ${topUp} exceeds approved top-up ceiling ${preflight.approvedTopUpCeilingLamports}; nothing was submitted`,
+        );
+      }
+      if (shortfall > 0n && !args.acceptVoteShortfall) {
+        throw new Error(
+          `recalculated vote top-up leaves a ${formatSol(shortfall)} SOL reserve shortfall; obtain approval with --accept-vote-shortfall; nothing was submitted`,
+        );
+      }
+      if (identityBefore - topUp < IDENTITY_EXECUTION_RESERVE_LAMPORTS) {
+        throw new Error("vote top-up would put the identity below its execution reserve; nothing was submitted");
+      }
+      const topUpSol = explicitSolAmount(topUp);
+      stage("vote-top-up-simulation", { amountLamports: topUp.toString(), amountSol: topUpSol });
+      await simulateUnsigned(
+        buildTopUpTransaction(preflight.feePayerSigner, args.identity, args.voteAccount, topUp),
+        "vote top-up",
+      );
+      stage("vote-top-up-submit", { amountLamports: topUp.toString() });
+      const transfer = await runCommand(
+        [
+          "solana",
+          "transfer",
+          "-u",
+          await requireRpcUrl(),
+          "--commitment",
+          "finalized",
+          "--fee-payer",
+          args.feePayerKeypair,
+          "--from",
+          args.identityKeypair,
+          args.voteAccount,
+          topUpSol,
+        ],
+        "vote top-up transfer",
+      );
+      voteTopUpSignature = parseCliSignature(`${transfer.stdout}\n${transfer.stderr}`);
+      if (!voteTopUpSignature) throw new Error("vote top-up succeeded but its signature was not printed");
+      await confirmFinalized(voteTopUpSignature);
+      stage("vote-top-up-finalized", { signature: voteTopUpSignature });
+      toppedUpLamports = topUp;
+
+      let [voteAfter, identityAfter] = [voteBefore, identityBefore];
+      const visible = await pollReadOnly(async () => {
+        [voteAfter, identityAfter] = await readVoteAndIdentity(args);
+        return voteAfter >= voteBefore + topUp ? true : undefined;
+      });
+      if (!visible) {
+        throw new Error(
+          `vote top-up ${voteTopUpSignature} finalized but the finalized vote balance ${voteAfter} does not include it; no bond funding was submitted`,
+        );
+      }
+      if (identityAfter < IDENTITY_HARD_FLOOR_LAMPORTS) {
+        throw new Error(`identity balance ${identityAfter} after the vote top-up is below the 5 SOL hard floor`);
+      }
+      if (voteAfter < voteReserveLamports) warnings.push(`vote balance ${voteAfter} remains below its reserve ${voteReserveLamports}`);
     }
-    currentIdentityLamports = identityLamports;
-    currentBond = (await pollReadOnly(() => getBond(args.voteAccount), 20, 1_500, fewFailures()))!;
-    assertSameBond(preflight.bond, currentBond, args);
   }
 
-  const fundingLamports = calculateFundingAfterVote(initialPlan, currentIdentityLamports);
+  // Step 2a: withdraw only the vote excess above the reserve, as an explicit amount.
+  if (initialPlan.voteAction === "withdraw-excess") {
+    const [voteBefore, identityBefore] = await readVoteAndIdentity(args);
+    const amount = calculateExecutionWithdrawal(voteBefore, voteReserveLamports, BigInt(initialPlan.voteTransferLamports));
+    if (amount <= 0n) {
+      skipped.push("vote withdrawal: no excess above the vote reserve");
+      stage("vote-withdrawal-skipped", { voteLamports: voteBefore.toString() });
+    } else {
+      const amountSol = explicitSolAmount(amount);
+      stage("vote-withdrawal-simulation", { amountLamports: amount.toString(), amountSol });
+      await simulateUnsigned(
+        buildVoteWithdrawTransaction(preflight.feePayerSigner, args.voteAccount, preflight.withdrawerSigner, args.identity, amount),
+        "vote withdrawal",
+      );
+      const withdrawal = await runCommand(
+        [
+          "solana",
+          "withdraw-from-vote-account",
+          "-u",
+          await requireRpcUrl(),
+          "--commitment",
+          "finalized",
+          "--fee-payer",
+          args.feePayerKeypair,
+          "--authorized-withdrawer",
+          args.withdrawerKeypair,
+          args.voteAccount,
+          args.identity,
+          amountSol,
+        ],
+        "vote-account withdrawal",
+      );
+      voteWithdrawalSignature = parseCliSignature(`${withdrawal.stdout}\n${withdrawal.stderr}`);
+      if (!voteWithdrawalSignature) throw new Error("vote withdrawal succeeded but its signature was not printed");
+      await confirmFinalized(voteWithdrawalSignature);
+      stage("vote-withdrawal-finalized", { signature: voteWithdrawalSignature });
+      withdrawnLamports = amount;
+
+      // Wait within a fixed bound for the finalized withdrawal to be visible in the identity,
+      // which sizes the bond funding. Vote growth (e.g. block revenue) is tolerated.
+      const identityWithWithdrawal = identityBefore + amount - IDENTITY_FEE_DRIFT_ALLOWANCE_LAMPORTS;
+      let [voteLamports, identityLamports] = [voteBefore, identityBefore];
+      const visible = await pollReadOnly(async () => {
+        [voteLamports, identityLamports] = await readVoteAndIdentity(args);
+        return identityLamports >= identityWithWithdrawal ? true : undefined;
+      });
+      assertVoteAtOrAboveReserve(voteLamports, voteReserveLamports, "after withdrawal");
+      if (!visible) {
+        throw new Error(
+          `identity balance ${identityLamports} does not yet include the withdrawn ${amount} lamports; no bond funding was submitted`,
+        );
+      }
+    }
+  }
+
+  // Step 2b: fund the bond only from what remains after the vote step has finalized.
+  const [voteBeforeFunding, currentIdentityLamports] = await readVoteAndIdentity(args);
+  const fundingLamports = calculateFundingAfterVote(initialPlan, currentIdentityLamports, withdrawnLamports);
+  const base = {
+    mode: "execute",
+    approvalId: preflight.approvalId,
+    voteReserveLamports: voteReserveLamports.toString(),
+    transactions: {
+      voteTopUpSignature,
+      voteTopUpLamports: toppedUpLamports.toString(),
+      voteWithdrawalSignature,
+      voteWithdrawalLamports: withdrawnLamports.toString(),
+    },
+  };
+  if (fundingLamports <= 0n) {
+    const completedAt = new Date();
+    return {
+      ...base,
+      completed: true,
+      completedAtUtc: completedAt.toISOString(),
+      completedAtLocal: formatLocalTime(completedAt, initialPlan.localTimeZone),
+      bondFundingSkipped: true,
+      reason: "recalculated funding is zero",
+      skipped,
+      warnings,
+      after: {
+        voteBalanceLamports: voteBeforeFunding.toString(),
+        identityBalanceLamports: currentIdentityLamports.toString(),
+        identityBalanceSol: formatSol(currentIdentityLamports),
+      },
+    };
+  }
+  if (voteBeforeFunding < voteReserveLamports) {
+    throw new Error(
+      `vote balance ${voteBeforeFunding} is below its reserve ${voteReserveLamports}; the vote reserve has priority, so no bond funding was submitted. Run a fresh plan.`,
+    );
+  }
   if (fundingLamports > preflight.approvedCeilingLamports) {
     throw new Error(
       `recalculated funding ${fundingLamports} exceeds approved ceiling ${preflight.approvedCeilingLamports}`,
     );
   }
-  if (fundingLamports === 0n) {
-    return {
-      mode: "execute",
-      completed: true,
-      voteWithdrawalSignature,
-      bondFundingSkipped: true,
-      reason: "recalculated funding is zero",
-    };
-  }
   if (currentIdentityLamports < fundingLamports || currentIdentityLamports - fundingLamports < IDENTITY_HARD_FLOOR_LAMPORTS) {
     throw new Error("recalculated funding would put the identity below the 5 SOL hard floor");
   }
+  const currentBond = (await pollReadOnly(() => getBond(args.voteAccount), 20, 1_500, fewFailures()))!;
+  assertSameBond(preflight.bond, currentBond, args);
 
-  const fundingSol = formatSol(fundingLamports);
+  const fundingSol = explicitSolAmount(fundingLamports);
   stage("bond-funding-simulation", { amountLamports: fundingLamports.toString(), amountSol: fundingSol });
   await runFundingCommand(args, fundingSol, true);
 
@@ -684,14 +948,16 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
     return parseSolLamports(finalBond.amountOwned) - bondOwnedBeforeFundingLamports >= fundingLamports ? true : undefined;
   }, 20, 1_500, fewFailures());
   assertSameBond(currentBond, finalBond, args);
-  let [finalVoteLamports, finalIdentityLamports] = [voteRentLamports, currentIdentityLamports];
+  let [finalVoteLamports, finalIdentityLamports] = [voteBeforeFunding, currentIdentityLamports];
   const voteAtReserve = await pollReadOnly(async () => {
-    [finalVoteLamports, finalIdentityLamports] = await Promise.all([getBalance(args.voteAccount), getBalance(args.identity)]);
-    return initialPlan.voteAction !== "withdraw-all" || finalVoteLamports === voteRentLamports ? true : undefined;
+    [finalVoteLamports, finalIdentityLamports] = await readVoteAndIdentity(args);
+    return finalVoteLamports >= voteReserveLamports ? true : undefined;
   });
-  if (!voteAtReserve) throw new Error("final vote balance no longer equals its rent reserve");
-  // The hard floor is what the funding transaction left in the identity. A later read keeps
-  // falling as the identity pays vote fees, so it is reported below and not asserted.
+  // Bond funding does not touch the vote account; only an epoch-start VAT debit can lower it here.
+  if (!voteAtReserve) {
+    warnings.push(`final vote balance ${finalVoteLamports} is below its reserve ${voteReserveLamports}; check for an epoch-start VAT debit and re-plan`);
+  }
+  // The hard floor is what the funding transaction left in the identity.
   const identityAfterFundingLamports =
     fundingTransaction.match.identityPostBalanceLamports === null
       ? finalIdentityLamports
@@ -706,19 +972,21 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
 
   const completedAt = new Date();
   return {
-    mode: "execute",
+    ...base,
     completed: true,
     completedAtUtc: completedAt.toISOString(),
     completedAtLocal: formatLocalTime(completedAt, initialPlan.localTimeZone),
-    approvalId: preflight.approvalId,
+    approvedTopUpCeilingLamports: preflight.approvedTopUpCeilingLamports.toString(),
     approvedCeilingLamports: preflight.approvedCeilingLamports.toString(),
+    skipped,
+    warnings,
     before: {
       voteBalanceLamports: initialPlan.voteBalanceLamports,
       identityBalanceLamports: initialPlan.identityBalanceLamports,
       bondOwnedLamports: parseSolLamports(preflight.bond.amountOwned).toString(),
     },
     transactions: {
-      voteWithdrawalSignature,
+      ...base.transactions,
       bondFundingSignature: fundingTransaction.signature,
       bondFundingSlot: fundingTransaction.match.slot,
       bondFundingBlockTime: fundingTransaction.match.blockTime,
@@ -730,7 +998,8 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
     },
     after: {
       voteBalanceLamports: finalVoteLamports.toString(),
-      voteRentLamports: voteRentLamports.toString(),
+      voteReserveLamports: voteReserveLamports.toString(),
+      voteRentLamports: initialPlan.voteRentExemptLamports,
       identityBalanceLamports: finalIdentityLamports.toString(),
       identityBalanceSol: formatSol(finalIdentityLamports),
       bondOwnedLamports: finalBondOwnedLamports.toString(),

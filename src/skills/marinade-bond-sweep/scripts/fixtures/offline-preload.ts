@@ -19,7 +19,7 @@ Bun.spawn = ((command: string[], options?: {env?: Record<string, string | undefi
   let stderr = "";
   let exitCode = 0;
   if (command[1]?.endsWith("/plan.ts")) {
-    // Deliberately model an older planner to test the executor's own preflight.
+    // Deliberately model an older or substituted planner to test the executor's own preflight.
     const safePlan = mode === "safe-plan" || mode === "planner-rpc-check";
     const balance = safePlan ? 5_000_000_000n : 4_000_000_000n;
     if (mode === "planner-rpc-check") {
@@ -28,14 +28,33 @@ Bun.spawn = ((command: string[], options?: {env?: Record<string, string | undefi
       const selected = selectRpc(rpcOptions(command.slice(2)), config, environment);
       if (selected.rpcUrl !== process.env.SWEEP_EXPECT_RPC) throw new Error("Planner used a different endpoint than the executor");
     }
-    stdout = JSON.stringify({
-      voteAccount: vote, identityAccount: identity,
-      identityBalanceLamports: String(balance), voteBalanceLamports: "2000000000",
-      voteRentExemptLamports: "27000000", voteTransferLamports: "1973000000",
-      identityTransferLamports: "0", projectedIdentityAfterVoteLamports: String(balance + 1_973_000_000n),
-      bondFundLamports: "1973000000", expectedFinalIdentityLamports: String(balance),
-      voteAction: "withdraw-all", identityAction: safePlan ? "no-op-at-target" : "skip-below-threshold",
-    });
+    const reserveSol = command[command.indexOf("--vote-reserve-sol") + 1];
+    const [whole, fraction = ""] = reserveSol.split(".");
+    const reserve = BigInt(whole) * 1_000_000_000n + BigInt(fraction.padEnd(9, "0"));
+    const common = {
+      voteAccount: vote, identityAccount: identity, voteRentExemptLamports: "27000000",
+      voteReserveLamports: String(reserve), voteReserveSol: reserveSol, minimumVoteReserveLamports: "927000000",
+    };
+    if (mode === "partial-top-up-plan") {
+      // Vote 1 SOL below a 3 SOL reserve; identity 6 SOL has only 0.999 SOL surplus.
+      stdout = JSON.stringify({
+        ...common, identityBalanceLamports: "6000000000", voteBalanceLamports: "1000000000",
+        voteAction: "top-up-partial", voteTopUpLamports: "999000000", voteTopUpSol: "0.999000000",
+        voteShortfallLamports: "1001000000", voteShortfallSol: "1.001000000", voteTransferLamports: "0",
+        identityAction: "fund-bond", identityTransferLamports: "0", projectedIdentityAfterVoteLamports: "5001000000",
+        bondFundLamports: "0", expectedFinalIdentityLamports: "5001000000",
+      });
+    } else {
+      // Vote 5 SOL above a 3 SOL reserve: withdraw exactly the 2 SOL excess.
+      stdout = JSON.stringify({
+        ...common, identityBalanceLamports: String(balance), voteBalanceLamports: "5000000000",
+        voteAction: "withdraw-excess", voteTopUpLamports: "0", voteShortfallLamports: "0",
+        voteTransferLamports: "2000000000", identityTransferLamports: "0",
+        projectedIdentityAfterVoteLamports: String(balance + 2_000_000_000n),
+        bondFundLamports: "2000000000", expectedFinalIdentityLamports: String(balance),
+        identityAction: safePlan ? "no-op-at-target" : "skip-below-threshold",
+      });
+    }
   } else if (command[0] === "solana-keygen") {
     stdout = command[2].endsWith("/identity.fixture") ? identity
       : command[2].endsWith("/withdrawer.fixture") ? "fixture-withdrawer" : "fixture-fee-payer";

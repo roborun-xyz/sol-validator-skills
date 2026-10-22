@@ -58,7 +58,7 @@ Requirements are Bun 1.3.3 and a mainnet RPC URL for chain queries: any http or 
 | [votex-roi-sim](skills/votex-roi-sim/SKILL.md) | Vote-buy ROI and break-even sizing with stated assumptions |
 | **Rewards and bonds** | |
 | [jito-bam-boost](skills/jito-bam-boost/SKILL.md) | Check claimable BAM Boost JitoSOL; claim only an exact approved amount |
-| [marinade-bond-sweep](skills/marinade-bond-sweep/SKILL.md) | Preflight and approved funding of an existing Marinade validator bond |
+| [marinade-bond-sweep](skills/marinade-bond-sweep/SKILL.md) | Keep the vote account funded for Alpenglow VAT, then fund an existing Marinade validator bond with approval |
 | **Operations** | |
 | [onboarding](skills/onboarding/SKILL.md) | Local validator profiles, RPC configuration, SFDP identity pairs |
 | [inventory](skills/inventory/SKILL.md) | Host roles, paths, signer roles and failover relationships |
