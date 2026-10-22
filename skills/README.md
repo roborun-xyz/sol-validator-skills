@@ -1,6 +1,6 @@
 ---
 created: 2026-10-08
-last_updated: 2026-10-08
+last_updated: 2026-10-22
 ---
 
 # Published skills
@@ -20,7 +20,7 @@ Each directory is one installable Agent Skill. It carries its own `SKILL.md`, th
 | [sfdp-check](sfdp-check/SKILL.md) | Check Solana Foundation Delegation Program participation and required software versions for an operator's mainnet/testnet identity pair, optionally verifying host health, identity, and client version over SSH. |
 | [upgrade-agave-primary](upgrade-agave-primary/SKILL.md) | Upgrade a voting Agave or Jito-Agave mainnet primary through a verified compatible Agave backup, including failover, failback and rollback. |
 | [upgrade-agave](upgrade-agave/SKILL.md) | Upgrade an operator-configured Agave or Jito-Agave unstaked mainnet backup, verifying its current role, isolated process lifecycle, installed binary and catchup. |
-| [upgrade-mainnet](upgrade-mainnet/SKILL.md) | Upgrade an operator-configured Firedancer primary through a verified Agave backup, preserving single-validator voting and fresh-tower requirements across failover and failback. |
+| [upgrade-mainnet](upgrade-mainnet/SKILL.md) | Upgrade an operator-configured Firedancer primary through a verified Agave backup, preserving single-validator voting and fresh vote-history requirements across failover and failback. |
 | [upgrade-testnet](upgrade-testnet/SKILL.md) | Upgrade Firedancer or Frankendancer on an operator-configured testnet instance with leader-window checks, release-matched tooling, scoped restart and voting verification. |
 | [validator-performance](validator-performance/SKILL.md) | Fetch Solana validator consensus performance by epoch, including vote credits and percent of max, rank, skip rate, block production, stake, commission, MEV commission, and current delinquency. |
 | [validator-revenue](validator-revenue/SKILL.md) | Fetch Solana validator historical gross and net revenue by epoch, including voting rewards, commission rewards, Jito rewards, BAM Boost JitoSOL subsidies, voting compensation, voting fees, and Marinade bond payments when present. |
