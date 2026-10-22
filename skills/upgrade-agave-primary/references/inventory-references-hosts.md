@@ -1,6 +1,6 @@
 ---
 created: 2026-09-15
-last_updated: 2026-09-20
+last_updated: 2026-10-22
 ---
 
 # Host and signer inventory
@@ -13,7 +13,7 @@ Before a host-based upgrade, record the following for **each validator instance*
 |---|---|
 | SSH alias and runtime user | Successful batch-mode SSH; verified process owner |
 | Cluster, role, identity, vote account | Local process/RPC identity and selected network; chain identity relationship where applicable |
-| Client family and running version | Actual running executable and version; do not infer from directory names |
+| Client family and running version | Actual running executable and version; do not infer from directory names. Mainnet requires an Alpenglow-capable release (Agave/Jito-Agave/Harmonic Salsa 4.3.2+, full Firedancer at or above SFDP `firedancer_full_min_version`) |
 | Source checkout and upstream | Absolute directory, remote URL, current commit, dirty status |
 | Build output and installed binary | Absolute paths; compiler/toolchain and release-specific build instructions |
 | Executable requirements | Required owner/mode and capabilities/attributes for enabled features; verified on the actual installed path |
@@ -21,8 +21,8 @@ Before a host-based upgrade, record the following for **each validator instance*
 | Plugins and alternate launchers | Client/plugin release compatibility, dependent consumers, and each role/rollback configuration that may start |
 | Data layout | Ledger/accounts paths, ownership, free space, local RPC port, admin socket availability |
 | Supervisor | Exact systemd unit or screen/tmux session, wrapper path, retry/restart behavior and scoped stop/start commands |
-| Staked/unstaked state | Public keys and remote key **paths**, on-chain voter authorization versus process-loaded voters, restart identity and voter persistence |
-| Backup pairing | Which vote account it may take over, distinct unstaked identity, tower path/format, isolation from other failovers; original/target roles and coverage impact if borrowed |
+| Staked/unstaked state | Public keys and remote key **paths**, on-chain voter authorization versus process-loaded voters, restart identity and voter persistence; BLS public key derived from the authorized voter (`solana-keygen bls_pubkey`) matching the vote account's registration |
+| Backup pairing | Which vote account it may take over, distinct unstaked identity, vote-history path (Agave ledger `vote_history-<staked>.bin`; Firedancer `[paths.vote_history]`) and how stale staked-identity files are quarantined, isolation from other failovers; original/target roles and coverage impact if borrowed |
 | Shared resources | Other validator instances and services, memory/hugepage/NIC conflicts, safe build job limit |
 | Rollback | Last working binaries, configs/plugins, revision, owner, required capabilities/attributes and commands; no private keys in copies |
 | Verification | UTC and local check time, source of each fact, unknown fields explicitly marked |
