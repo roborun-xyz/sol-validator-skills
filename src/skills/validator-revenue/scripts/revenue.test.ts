@@ -11,6 +11,11 @@ import {
   totals,
   renderCsv,
   renderMarkdown,
+  fetchVatDebits,
+  vatDebitFromRewards,
+  vatDebitFromSvt,
+  vatNotes,
+  ALPENGLOW_FIRST_EPOCH,
 } from "./revenue";
 
 const BAM_PROGRAM = "BoostxbPp2ENYHGcTLYt1obpcY13HE4NojdqNWdzqSSb";
@@ -208,12 +213,12 @@ describe("Markdown layout", () => {
     const md = renderMarkdown({ voteAccount: TEST_VOTE, currentEpoch: 101, firstEpoch: 100, lastEpoch: 100, rows: [row], hasMarinadeBond: false, marinadeBondAccounts: [] });
     const tables = md.split("\n").filter(line => line.startsWith("| Epoch"));
     expect(tables).toHaveLength(2);
-    expect(columns(tables[0]!)).toBe(11);
+    expect(columns(tables[0]!)).toBe(12);
     expect(tables[0]).not.toContain("JitoSOL/SOL");
     expect(tables[1]).toContain("Rate Time (UTC)");
     const [mainRow, detailRow] = md.split("\n").filter(line => line.startsWith("| 100 |"));
     expect(detailRow).toBeDefined();
-    expect(columns(mainRow!)).toBe(11);
+    expect(columns(mainRow!)).toBe(12);
     expect(mainRow).not.toContain("2026-10-04");
     expect(detailRow).toContain("| 800 |");
     expect(detailRow).toContain("| 1.304624952 | 2026-10-04T23:07:59Z | 2026-10-04T16:07:59-07:00 |");
@@ -224,8 +229,85 @@ describe("Markdown layout", () => {
     const row = { ...totals([]), epoch: 100, marinadeBondPaymentSol: 2, marinadeBondPaymentStatus: "paid" as const };
     const md = renderMarkdown({ voteAccount: TEST_VOTE, currentEpoch: 101, firstEpoch: 100, lastEpoch: 100, rows: [row], hasMarinadeBond: true, marinadeBondAccounts: [] });
     const [header, , body] = md.split("\n").filter(line => line.startsWith("| Epoch") || line.startsWith("|---") || line.startsWith("| 100 |"));
-    expect(columns(header!)).toBe(12);
-    expect(columns(body!)).toBe(12);
+    expect(columns(header!)).toBe(13);
+    expect(columns(body!)).toBe(13);
     expect(body).toContain("2.000000 (paid)");
+  });
+});
+
+describe("Alpenglow VAT", () => {
+  const VOTE = "R2D2vs3bJwpNF2ejaB6UW1JdCZ5VstuAmuwxDuUUWNj";
+  const FIRST_SLOT_1064 = 459_648_000;
+  const vatReward = (pubkey = VOTE) => ({ pubkey, lamports: -800_000_000, postBalance: 1, rewardType: "VATDebit", commission: null });
+
+  async function vat(svt: Map<number, unknown>, epochs: number[], blockRewards: unknown[] | "fail") {
+    const methods: string[] = [];
+    const mockFetch = Object.assign(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const { method, params } = JSON.parse(String(init?.body));
+      methods.push(method);
+      const result = method === "getEpochSchedule" ? { slotsPerEpoch: 432_000, firstNormalEpoch: 0, firstNormalSlot: 0 }
+        : method === "getBlocks" ? [params[0]]
+        : method === "getBlock" ? (blockRewards === "fail" ? undefined : { rewards: blockRewards })
+        : undefined;
+      return result === undefined ? Response.json({ jsonrpc: "2.0", id: 1, error: { code: -32009, message: "skipped" } })
+        : Response.json({ jsonrpc: "2.0", id: 1, result });
+    }, { preconnect: globalThis.fetch.preconnect });
+    const fetchMock = spyOn(globalThis, "fetch").mockImplementation(mockFetch);
+    try { return { result: await fetchVatDebits("http://rpc.test", VOTE, svt, epochs), methods }; }
+    finally { fetchMock.mockRestore(); }
+  }
+
+  test("parses the VATDebit block reward and SVT vatDebit as positive costs", () => {
+    expect(vatDebitFromRewards([vatReward(), vatReward("other"), { pubkey: VOTE, lamports: 5, rewardType: "Voting" }], VOTE)).toBe(800_000_000n);
+    expect(vatDebitFromRewards([vatReward("other")], VOTE)).toBeNull();
+    expect(vatDebitFromSvt(null)).toBeNull();
+    expect(vatDebitFromSvt(undefined)).toBeNull();
+    expect(vatDebitFromSvt("800000000")).toBe(800_000_000n);
+    expect(vatDebitFromSvt(-800_000_000)).toBe(800_000_000n);
+    for (const bad of ["0.8", 0.8, "x", {}]) expect(() => vatDebitFromSvt(bad)).toThrow("invalid vatDebit");
+  });
+
+  test("pre-Alpenglow epochs are zero without RPC; SVT vatDebit is preferred", async () => {
+    const { result, methods } = await vat(new Map([[ALPENGLOW_FIRST_EPOCH, "800000000"]]), [1063, 1064], "fail");
+    expect(result.get(1063)).toEqual({ lamports: 0n, status: "pre_alpenglow", block: null });
+    expect(result.get(1064)).toEqual({ lamports: 800_000_000n, status: "svt", block: null });
+    expect(methods).toEqual([]);
+  });
+
+  test("reads the first confirmed block of the epoch when SVT vatDebit is null", async () => {
+    const { result } = await vat(new Map([[1064, null]]), [1064], [vatReward("other"), vatReward()]);
+    expect(result.get(1064)).toEqual({ lamports: 800_000_000n, status: "rpc_block", block: FIRST_SLOT_1064 });
+  });
+
+  test("absent reward is provisional and unavailable block is missing, never silently zero", async () => {
+    expect((await vat(new Map(), [1064], [vatReward("other")])).result.get(1064)?.status).toBe("rpc_absent");
+    expect((await vat(new Map(), [1065], "fail")).result.get(1065)).toEqual({ lamports: 0n, status: "missing", block: null });
+  });
+
+  test("outputs carry VAT columns, deduct it in totals and flag provisional epochs loudly", () => {
+    const base = { ...totals([]), grossRevenueSol: 2, votingFeeSol: 0.1 };
+    const rows = [
+      { ...base, epoch: 1063, vatStatus: "pre_alpenglow" as const, netRevenueSol: 1.9 },
+      { ...base, epoch: 1064, vatSol: 0.8, vatStatus: "rpc_block" as const, vatBlock: FIRST_SLOT_1064, netRevenueSol: 1.1 },
+      { ...base, epoch: 1065, vatStatus: "missing" as const, admissionFailure: true, netRevenueSol: 1.9 },
+    ];
+    const total = totals(rows);
+    expect(total.vatSol).toBe(0.8);
+    expect(total.vatStatus).toBe("missing");
+    expect(total.admissionFailure).toBe(true);
+    const csv = renderCsv(rows, false).split("\n").map(line => line.split(","));
+    expect(csv[0]?.length).toBe(csv[1]?.length);
+    expect(csv[2]?.[csv[0]!.indexOf("vat_sol")]).toBe("0.800000000");
+    expect(csv[2]?.[csv[0]!.indexOf("vat_block")]).toBe(String(FIRST_SLOT_1064));
+    expect(csv[3]?.[csv[0]!.indexOf("vat_status")]).toBe("missing");
+    expect(csv[3]?.[csv[0]!.indexOf("admission_failure")]).toBe("true");
+    expect(vatNotes(rows)).toEqual([expect.stringContaining("VAT is unknown for epoch(s) `1065`"), expect.stringContaining("admissionFailure=true for epoch(s) `1065`")]);
+    const md = renderMarkdown({ voteAccount: VOTE, currentEpoch: 1066, firstEpoch: 1063, lastEpoch: 1065, rows, hasMarinadeBond: false, marinadeBondAccounts: [] });
+    expect(md).toContain("net = gross - vote transaction fees (TowerBFT; partial in 1064) - VAT");
+    expect(md).toContain("attributed to the epoch in which it is debited");
+    expect(md).toContain("| 0.800000 (rpc_block) |");
+    expect(md).toContain("(missing, PROVISIONAL) ADMISSION FAILURE");
+    expect(md).toContain("- VAT (attributed to the debit epoch) (PROVISIONAL");
+    expect(md).toContain("Net revenue (PROVISIONAL: VAT missing or unverified for some epochs)");
   });
 });

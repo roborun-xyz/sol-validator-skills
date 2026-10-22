@@ -1,6 +1,6 @@
 ---
 created: 2026-10-08
-last_updated: 2026-10-08
+last_updated: 2026-10-22
 ---
 
 # Published skills
@@ -23,7 +23,7 @@ Each directory is one installable Agent Skill. It carries its own `SKILL.md`, th
 | [upgrade-mainnet](upgrade-mainnet/SKILL.md) | Upgrade an operator-configured Firedancer primary through a verified Agave backup, preserving single-validator voting and fresh-tower requirements across failover and failback. |
 | [upgrade-testnet](upgrade-testnet/SKILL.md) | Upgrade Firedancer or Frankendancer on an operator-configured testnet instance with leader-window checks, release-matched tooling, scoped restart and voting verification. |
 | [validator-performance](validator-performance/SKILL.md) | Fetch Solana validator consensus performance by epoch, including vote credits and percent of max, rank, skip rate, block production, stake, commission, MEV commission, and current delinquency. |
-| [validator-revenue](validator-revenue/SKILL.md) | Fetch Solana validator historical gross and net revenue by epoch, including voting rewards, commission rewards, Jito rewards, BAM Boost JitoSOL subsidies, voting compensation, voting fees, and Marinade bond payments when present. |
+| [validator-revenue](validator-revenue/SKILL.md) | Fetch Solana validator historical gross and net revenue by epoch, including voting rewards, commission rewards, Jito rewards, BAM Boost JitoSOL subsidies, voting compensation, vote transaction fees, Alpenglow VAT, and Marinade bond payments when present. |
 | [votex-roi-sim](votex-roi-sim/SKILL.md) | Simulate Votex/The Vault vote-buy ROI for a validator gauge, including bid dilution, acquired veV, gauge-directed SOL, optional SFDP match, revenue, net profit, ROI, and break-even sizing. |
 | [votex-status](votex-status/SKILL.md) | Fetch current or historical Votex/The Vault vote-buy status, including target epoch, USDC bids, bid share, acquired veV when published, and on-chain IncreaseVoteBuy fallback transactions. |
 
