@@ -1,6 +1,6 @@
 ---
 created: 2026-09-15
-last_updated: 2026-09-25
+last_updated: 2026-10-22
 ---
 
 # Local fleet onboarding for SFDP and host checks
@@ -35,7 +35,15 @@ For participation-only checks, create a versioned file with `hosts: []`. For liv
 }
 ```
 
-The placeholder keys intentionally fail validation until replaced. Allowed clusters are `mainnet-beta` and `testnet`; clients are `agave`, `jito-agave`, and `firedancer`. Use preconfigured SSH aliases or `user@hostname`, without options, whitespace, or shell expressions. Put connection options in the operator's SSH config. No passwords, RPC URLs, or private key material belong in this file.
+The placeholder keys intentionally fail validation until replaced. Allowed clusters are `mainnet-beta` and `testnet`; clients are `agave`, `jito-agave`, `firedancer`, and `firedancer-full`.
+
+| `client` | Runs | SFDP bounds compared |
+| --- | --- | --- |
+| `agave`, `jito-agave` | Agave or Jito-Agave | `agave_min_version` / `agave_max_version` |
+| `firedancer` | Frankendancer (Firedancer networking with Agave runtime, `0.x` versions) | `firedancer_min_version` / `firedancer_max_version` |
+| `firedancer-full` | Full Firedancer, including forks such as FireBAM (CalVer versions, e.g. `26.10.3`) | `firedancer_full_min_version` / `firedancer_full_max_version` |
+
+`firedancer` keeps its historical Frankendancer meaning for existing files. A full-Firedancer host configured as `firedancer` would be compared with the much lower Frankendancer minimum, so the checker reports a client-mismatch warning and does not pass when a `firedancer` host reports a CalVer version (major 26 or higher), or a `firedancer-full` host reports a `0.x` version. Verify the client family during onboarding and update the entry when a host changes client. Use preconfigured SSH aliases or `user@hostname`, without options, whitespace, or shell expressions. Put connection options in the operator's SSH config. No passwords, RPC URLs, or private key material belong in this file.
 
 Create the parent directory with mode `0700` and the configuration with mode `0600`. Validate the prepared file locally before making network calls:
 
