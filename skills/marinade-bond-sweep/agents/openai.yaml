@@ -1,4 +1,4 @@
 interface:
   display_name: "Marinade Bond Sweep"
-  short_description: "Sweep validator surplus SOL into its Marinade bond"
-  default_prompt: "Use $marinade-bond-sweep to sweep a mainnet validator vote and identity surplus into its Marinade bond."
+  short_description: "Keep the vote account funded, then sweep surplus SOL into its Marinade bond"
+  default_prompt: "Use $marinade-bond-sweep to keep a mainnet validator vote account above its Alpenglow reserve and sweep the remaining surplus into its Marinade bond."

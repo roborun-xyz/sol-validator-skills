@@ -1,6 +1,6 @@
 ---
 created: 2026-10-08
-last_updated: 2026-10-08
+last_updated: 2026-10-22
 ---
 
 # Published skills
@@ -15,7 +15,7 @@ Each directory is one installable Agent Skill. It carries its own `SKILL.md`, th
 | [inventory](inventory/SKILL.md) | Discover, verify, and maintain Solana validator host and instance facts, including roles, paths, signer roles, and failover relationships. |
 | [jito-bam-boost](jito-bam-boost/SKILL.md) | Check and claim Jito BAM Boost JitoSOL rewards for a Solana mainnet validator identity. |
 | [jitosol-steward](jitosol-steward/SKILL.md) | Check current JitoSOL Steward validator ranking, algorithmic delegation fraction, active/transient stake, instant unstake and scoring cycle on Solana mainnet. |
-| [marinade-bond-sweep](marinade-bond-sweep/SKILL.md) | Sweep surplus SOL from a Solana mainnet validator vote account and identity account into its existing Marinade Validator Bond using keypairs held on the local operator machine. |
+| [marinade-bond-sweep](marinade-bond-sweep/SKILL.md) | Keep a Solana mainnet validator's vote account funded for Alpenglow's per-epoch VAT, then sweep remaining vote-account and identity surplus into its existing Marinade Validator Bond using keypairs held on the local operator machine. |
 | [onboarding](onboarding/SKILL.md) | Create, repair, or refresh local Solana validator profiles, persisted RPC URLs, and SFDP identity-pair configuration. |
 | [sfdp-check](sfdp-check/SKILL.md) | Check Solana Foundation Delegation Program participation and required software versions for an operator's mainnet/testnet identity pair, optionally verifying host health, identity, and client version over SSH. |
 | [upgrade-agave-primary](upgrade-agave-primary/SKILL.md) | Upgrade a voting Agave or Jito-Agave mainnet primary through a verified compatible Agave backup, including failover, failback and rollback. |

@@ -47,6 +47,7 @@ test("executor rejects impossible sweeps in read-only and approved preflight bef
     for (const extra of [[], [
       "--execute", "--operator-approved", "--approval-id", approval.approvalId,
       "--approved-ceiling-lamports", approval.approvedCeilingLamports,
+      "--approved-top-up-ceiling-lamports", approval.approvedTopUpCeilingLamports,
     ]]) {
       const result = await run("execute.ts", "below-floor-plan", [...args, ...extra]);
       expect(result.code).toBe(1);
@@ -54,6 +55,51 @@ test("executor rejects impossible sweeps in read-only and approved preflight bef
       expect(result.stdout).toBe("");
       expect(result.stderr).not.toContain("UNEXPECTED_MUTATION_ATTEMPT");
     }
+  });
+});
+
+test("executor rejects a vote reserve below rent + Alpenglow VAT before any mutation", async () => {
+  await withSignerPaths(async (args) => {
+    const result = await run("execute.ts", "safe-plan", [...args, "--vote-reserve-sol", "0.5"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Alpenglow VAT");
+    expect(result.stdout).toBe("");
+    expect(result.stderr).not.toContain("UNEXPECTED_MUTATION_ATTEMPT");
+  });
+});
+
+test("executor preflight withdraws only the vote excess and binds the reserve to approval", async () => {
+  await withSignerPaths(async (args) => {
+    const result = await run("execute.ts", "safe-plan", args);
+    expect(result.code).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.mutationPerformed).toBe(false);
+    expect(output.action.vote).toBe("withdraw-excess");
+    expect(output.action.voteTransferLamports).toBe("2000000000");
+    expect(output.balances.voteReserveLamports).toBe("3000000000");
+    const larger = JSON.parse((await run("execute.ts", "safe-plan", [...args, "--vote-reserve-sol", "4"])).stdout);
+    expect(larger.approval.approvalId).not.toBe(output.approval.approvalId);
+  });
+});
+
+test("partial vote top-up reports the shortfall and needs explicit acceptance before any mutation", async () => {
+  await withSignerPaths(async (args) => {
+    const preflight = await run("execute.ts", "partial-top-up-plan", args);
+    expect(preflight.code).toBe(0);
+    const output = JSON.parse(preflight.stdout);
+    expect(output.action.vote).toBe("top-up-partial");
+    expect(output.action.voteShortfallLamports).toBe("1001000000");
+    expect(output.approval.required).toBe(true);
+    expect(output.approval.requiresShortfallAcceptance).toBe(true);
+    expect(output.approval.warnings.join(" ")).toContain("VAT");
+    const result = await run("execute.ts", "partial-top-up-plan", [
+      ...args, "--execute", "--operator-approved", "--approval-id", output.approval.approvalId,
+      "--approved-ceiling-lamports", output.approval.approvedCeilingLamports,
+      "--approved-top-up-ceiling-lamports", output.approval.approvedTopUpCeilingLamports,
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("--accept-vote-shortfall");
+    expect(result.stderr).not.toContain("UNEXPECTED_MUTATION_ATTEMPT");
   });
 });
 
