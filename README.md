@@ -1,6 +1,6 @@
 ---
 created: 2026-03-11
-last_updated: 2026-10-22
+last_updated: 2026-10-24
 ---
 
 # Solana Validator Skills
@@ -32,13 +32,13 @@ Requirements are Bun 1.3.3 and a mainnet RPC URL for chain queries: any http or 
 > Current epoch `1052` — slot 173,236 / 432,000 (40.10%).
 > Node identity `Fc6NNdS2j3EmrWbU6Uqt6wsKB5ef72NjaWfNxKYbULGD`, delinquent `no`, activated stake `3,973,470 SOL`, live commission `5%`.
 >
-> | Epoch | Stake SOL | Vote Credits | TVC % | TVC Rank | Blocks | Block Prod % | Skip Rate | Commission | MEV Comm |
-> |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-> | 1047 | 3,994,579 | 6,903,974 | 99.88% | #454 | 4,108/4,108 | 100.00% | 0.00% | 5% | 8% |
-> | 1048 | 4,033,160 | 6,906,950 | 99.93% | #506 | 3,900/3,900 | 100.00% | 0.00% | 5% | 8% |
-> | 1049 | 4,004,541 | 6,903,545 | 99.88% | #512 | 3,884/3,884 | 100.00% | 0.00% | 5% | 8% |
-> | 1050 | 4,024,391 | 6,899,719 | 99.82% | #484 | 4,104/4,104 | 100.00% | 0.00% | 5% | 8% |
-> | 1051 | 3,934,965 | 6,908,434 | 99.95% | #495 | 4,052/4,052 | 100.00% | 0.00% | 5% | 8% |
+> | Epoch | Credit Scale | Stake SOL | Vote Credits | TVC % | TVC Rank | Blocks | Block Prod % | Skip Rate | Commission | MEV Comm |
+> |---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+> | 1047 | TowerBFT | 3,994,579 | 6,903,974 | 99.88% | #454 | 4,108/4,108 | 100.00% | 0.00% | 5% | 8% |
+> | 1048 | TowerBFT | 4,033,160 | 6,906,950 | 99.93% | #506 | 3,900/3,900 | 100.00% | 0.00% | 5% | 8% |
+> | 1049 | TowerBFT | 4,004,541 | 6,903,545 | 99.88% | #512 | 3,884/3,884 | 100.00% | 0.00% | 5% | 8% |
+> | 1050 | TowerBFT | 4,024,391 | 6,899,719 | 99.82% | #484 | 4,104/4,104 | 100.00% | 0.00% | 5% | 8% |
+> | 1051 | TowerBFT | 3,934,965 | 6,908,434 | 99.95% | #495 | 4,052/4,052 | 100.00% | 0.00% | 5% | 8% |
 >
 > Window summary: total vote credits `34,522,622`, avg TVC `99.89%`, block production `20,048 / 20,048`, avg skip rate `0.00%`.
 
@@ -49,7 +49,7 @@ Requirements are Bun 1.3.3 and a mainnet RPC URL for chain queries: any http or 
 | Skill | What it does |
 |---|---|
 | **Monitoring** | |
-| [validator-performance](skills/validator-performance/SKILL.md) | Vote credits, TVC rank, skip rate, block production, stake and commission by epoch |
+| [validator-performance](skills/validator-performance/SKILL.md) | Vote credits, TVC % of max and rank (TowerBFT and Alpenglow), skip rate, block production, stake and commission by epoch |
 | [validator-revenue](skills/validator-revenue/SKILL.md) | Gross and net SOL by epoch: rewards, Jito MEV, BAM Boost, fees, Marinade bond costs |
 | [jitosol-steward](skills/jitosol-steward/SKILL.md) | JitoSOL Steward rank, delegation fraction, active and transient stake |
 | [sfdp-check](skills/sfdp-check/SKILL.md) | SFDP participation, required versions, optional host checks over SSH |
