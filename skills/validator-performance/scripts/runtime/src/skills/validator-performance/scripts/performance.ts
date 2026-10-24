@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { fetchSvtHistory, unavailableEpochsNote, toCount, leaderSkipRatePct } from "../../shared/epoch-history";
+import { fetchSvtHistory, unavailableEpochsNote, toCount, leaderSkipRatePct, ALPENGLOW_FIRST_EPOCH } from "../../shared/epoch-history";
 import { lamportsToSol } from "../../shared/amounts";
 
 import { rpcCall as rpc, resolveOperator } from "../../shared/operator-config";
@@ -35,6 +35,8 @@ type SvtHistoryRow = {
   epoch: number;
   tvCredits?: number;
   tvcRank?: number;
+  // Alpenglow epochs only: credits / the epoch's maximum credits; null/absent until published.
+  creditsRatio?: number | null;
   leaderSlotsTotal?: number;
   leaderSlotsDone?: number;
   fee?: number;
@@ -44,8 +46,15 @@ type SvtHistoryRow = {
   slotsInEpoch?: number;
 };
 
+/**
+ * TowerBFT credits (at most 16 per slot) and Alpenglow credits (lamports of nominal vote reward,
+ * scaled by stake and epoch inflation) are different units. Never sum or average across them.
+ */
+export type CreditScale = "towerbft" | "alpenglow";
+
 type PerfRow = {
   epoch: number;
+  creditScale: CreditScale;
   stakeSol: number | null;
   voteCredits: number | null;
   tvcPctOfMax: number | null;
@@ -66,6 +75,7 @@ type CurrentStatus = {
   nodePubkey: string | null;
 };
 
+// TowerBFT timely vote credits (SIMD-0033) award at most 16 credits per slot.
 const MAX_TVC_PER_SLOT = 16;
 const DEFAULT_SLOTS_PER_EPOCH = 432_000;
 
@@ -127,7 +137,11 @@ async function fetchCurrentStatus(opts: Options, voteAccount: string): Promise<C
   }
 }
 
-function tvcPctOfMax(row: SvtHistoryRow): number | null {
+export function creditScale(epoch: number): CreditScale {
+  return epoch >= ALPENGLOW_FIRST_EPOCH ? "alpenglow" : "towerbft";
+}
+
+function towerTvcPctOfMax(row: SvtHistoryRow): number | null {
   const credits = toCount(row.tvCredits);
   if (credits === null) return null;
   const slots = row.slotsInEpoch === undefined ? DEFAULT_SLOTS_PER_EPOCH : toCount(row.slotsInEpoch);
@@ -137,9 +151,23 @@ function tvcPctOfMax(row: SvtHistoryRow): number | null {
   return (credits / max) * 100;
 }
 
+/**
+ * Alpenglow credits are the lamports Agave credits per reward certificate: half of
+ * `epochInflation * stake / (slotsPerEpoch * totalStake)` per rewarded slot as a voter, plus the
+ * other half for each voter in the certificates the validator includes as leader. The maximum
+ * therefore needs the epoch's on-chain inflation budget and VAT-filtered total epoch stake, which
+ * RPC does not serve for past epochs. JPool/SVT `creditsRatio` is credits divided by that maximum
+ * (reproduced from the Agave formula for epoch 1065), and its `tvcRank` ranks that ratio.
+ */
+function alpenglowTvcPctOfMax(row: SvtHistoryRow): number | null {
+  const ratio = toNumber(row.creditsRatio);
+  return ratio === null || ratio < 0 ? null : ratio * 100;
+}
+
 // An in-progress epoch cannot be compared with a full epoch's maximum credits, and upstream
 // publishes zero credits, leader slots and MEV commission for it as placeholders, not measurements.
 export function normalizePerformanceRow(row: SvtHistoryRow, inProgress = false): PerfRow {
+  const scale = creditScale(row.epoch);
   const placeholder = (count: number | null) => (inProgress && count === 0 ? null : count);
   const leaderSlots = placeholder(toCount(row.leaderSlotsTotal));
   const blocksProduced = leaderSlots === null && inProgress ? null : toCount(row.leaderSlotsDone);
@@ -147,14 +175,17 @@ export function normalizePerformanceRow(row: SvtHistoryRow, inProgress = false):
     leaderSlots !== null && blocksProduced !== null && leaderSlots > 0 && blocksProduced <= leaderSlots
       ? (blocksProduced / leaderSlots) * 100 : null;
   const mevCommission = placeholder(toNumber(row.mevCommission));
+  const tvcPct = inProgress ? null : scale === "alpenglow" ? alpenglowTvcPctOfMax(row) : towerTvcPctOfMax(row);
   const tvcRank = toCount(row.tvcRank);
   return {
     epoch: row.epoch,
+    creditScale: scale,
     stakeSol: stakeLamportsToSol(row.totalStake),
     voteCredits: placeholder(toCount(row.tvCredits)),
-    tvcPctOfMax: inProgress ? null : tvcPctOfMax(row),
-    // Ranks are 1-based; upstream publishes 0 as a placeholder.
-    tvcRank: tvcRank === 0 ? null : tvcRank,
+    tvcPctOfMax: tvcPct,
+    // Ranks are 1-based; upstream publishes 0 as a placeholder. An Alpenglow rank orders
+    // creditsRatio, so it is unavailable without that ratio.
+    tvcRank: tvcRank === 0 || (scale === "alpenglow" && tvcPct === null) ? null : tvcRank,
     blocksProduced,
     leaderSlots,
     blockProductionPct,
@@ -173,6 +204,7 @@ async function collectRows(opts: Options, voteAccount: string): Promise<{
   firstEpoch: number;
   lastEpoch: number;
   inProgressEpoch: number | null;
+  alpenglowFirstEpoch: number;
   rows: PerfRow[];
   current: CurrentStatus;
 }> {
@@ -196,6 +228,7 @@ async function collectRows(opts: Options, voteAccount: string): Promise<{
     firstEpoch: svtRows[0].epoch,
     lastEpoch,
     inProgressEpoch: opts.includeCurrent ? currentEpoch : null,
+    alpenglowFirstEpoch: ALPENGLOW_FIRST_EPOCH,
     rows,
     current,
   };
@@ -230,14 +263,37 @@ function fmtRank(value: number | null): string {
 
 type WindowScope = { requestedFirstEpoch?: number; firstEpoch: number; lastEpoch: number; inProgressEpoch?: number | null };
 
-/** Disclosures for a window that is shorter than requested or includes a partial epoch. */
+/** Disclosures for a window that is shorter than requested, includes a partial epoch or Alpenglow epochs. */
 export function windowNotes(result: WindowScope): string[] {
   const notes = unavailableEpochsNote(result.requestedFirstEpoch ?? result.firstEpoch, result.firstEpoch, result.lastEpoch);
   if (result.inProgressEpoch != null) {
     notes.push(`Epoch \`${result.inProgressEpoch}\` is in progress: its upstream values are partial or placeholders, and it is excluded from the window summary.`);
   }
+  if (result.lastEpoch >= ALPENGLOW_FIRST_EPOCH) {
+    notes.push(`From epoch \`${ALPENGLOW_FIRST_EPOCH}\` (Alpenglow) vote credits are lamports of nominal vote reward, which scale with stake, epoch inflation and leader slots; they are not comparable with earlier TowerBFT credits (at most 16 per slot). Alpenglow TVC % is JPool/SVT \`creditsRatio\` (credits / the epoch's maximum) and TVC Rank ranks that ratio; both are unavailable until published. Credit totals and TVC % averages are reported separately for each scale.`);
+  }
+  if (result.firstEpoch <= ALPENGLOW_FIRST_EPOCH && result.lastEpoch >= ALPENGLOW_FIRST_EPOCH) {
+    notes.push(`Epoch \`${ALPENGLOW_FIRST_EPOCH}\` is the migration epoch: Alpenglow began at slot 459,653,000, so its credits also include about 5,000 slots of TowerBFT credits and its TVC % is approximate.`);
+  }
   return notes;
 }
+
+type ScaleSegment = { scale: CreditScale; firstEpoch: number; lastEpoch: number; rows: PerfRow[] };
+
+/** Contiguous runs of completed rows on one credit scale, in epoch order. */
+export function scaleSegments(rows: PerfRow[]): ScaleSegment[] {
+  const segments: ScaleSegment[] = [];
+  for (const row of rows) {
+    const last = segments.at(-1);
+    if (last && last.scale === row.creditScale) {
+      last.rows.push(row);
+      last.lastEpoch = row.epoch;
+    } else segments.push({ scale: row.creditScale, firstEpoch: row.epoch, lastEpoch: row.epoch, rows: [row] });
+  }
+  return segments;
+}
+
+const SCALE_LABEL: Record<CreditScale, string> = { towerbft: "TowerBFT", alpenglow: "Alpenglow" };
 
 export function renderMarkdown(result: WindowScope & {
   voteAccount: string;
@@ -275,24 +331,22 @@ export function renderMarkdown(result: WindowScope & {
   lines.push(
     `## Per-Epoch Performance (epochs \`${result.firstEpoch}-${result.lastEpoch}\`)`,
     "",
-    "| Epoch | Stake SOL | Vote Credits | TVC % | TVC Rank | Blocks | Block Prod % | Skip Rate | Commission | MEV Comm |",
-    "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "| Epoch | Credit Scale | Stake SOL | Vote Credits | TVC % | TVC Rank | Blocks | Block Prod % | Skip Rate | Commission | MEV Comm |",
+    "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
   );
 
   for (const row of result.rows) {
     lines.push(
-      `| ${row.epoch}${row.epoch === result.inProgressEpoch ? " (in progress)" : ""} | ${fmtInt(row.stakeSol)} | ${fmtInt(row.voteCredits)} | ${fmtPct(row.tvcPctOfMax)} | ${fmtRank(row.tvcRank)} | ${fmtInt(row.blocksProduced)}/${fmtInt(row.leaderSlots)} | ${fmtPct(row.blockProductionPct)} | ${fmtPct(row.skipRatePct)} | ${fmtPct(row.commissionPct, 0)} | ${fmtPct(row.mevCommissionPct, 0)} |`,
+      `| ${row.epoch}${row.epoch === result.inProgressEpoch ? " (in progress)" : ""} | ${SCALE_LABEL[row.creditScale]} | ${fmtInt(row.stakeSol)} | ${fmtInt(row.voteCredits)} | ${fmtPct(row.tvcPctOfMax)} | ${fmtRank(row.tvcRank)} | ${fmtInt(row.blocksProduced)}/${fmtInt(row.leaderSlots)} | ${fmtPct(row.blockProductionPct)} | ${fmtPct(row.skipRatePct)} | ${fmtPct(row.commissionPct, 0)} | ${fmtPct(row.mevCommissionPct, 0)} |`,
     );
   }
 
   const completed = result.rows.filter((r) => r.epoch !== result.inProgressEpoch);
   const lastCompletedEpoch = result.inProgressEpoch != null ? result.lastEpoch - 1 : result.lastEpoch;
-  const avgTvcPct = average(completed.map((r) => r.tvcPctOfMax));
   const avgSkip = average(completed.map((r) => r.skipRatePct));
   const avgBlockProd = average(completed.map((r) => r.blockProductionPct));
   const avgCommission = average(completed.map((r) => r.commissionPct));
   const avgMevCommission = average(completed.map((r) => r.mevCommissionPct));
-  const totalCredits = sum(completed.map((r) => r.voteCredits));
   const totalBlocks = sum(completed.map((r) => r.blocksProduced));
   const totalLeaderSlots = sum(completed.map((r) => r.leaderSlots));
 
@@ -305,8 +359,7 @@ export function renderMarkdown(result: WindowScope & {
       ? `Window summary (epochs \`${result.firstEpoch}-${lastCompletedEpoch}\`):`
       : "Window summary (no completed epochs in the window):",
     "",
-    `- Total vote credits: \`${fmtInt(totalCredits)}\``,
-    `- Avg TVC % of max: \`${fmtPct(avgTvcPct)}\``,
+    ...creditSummaryLines(completed),
     `- Block production: \`${fmtInt(totalBlocks)} / ${fmtInt(totalLeaderSlots)}\` leader slots (\`${fmtPct(avgBlockProd)}\` average)`,
     `- Avg skip rate: \`${fmtPct(avgSkip)}\``,
     `- Avg commission: \`${fmtPct(avgCommission, 1)}\``,
@@ -314,6 +367,28 @@ export function renderMarkdown(result: WindowScope & {
   );
 
   return lines.join("\n");
+}
+
+/**
+ * Credit totals and TVC % averages per credit scale. A window entirely before Alpenglow keeps the
+ * unlabelled lines; otherwise each scale's line names its scale and epoch range.
+ */
+function creditSummaryLines(completed: PerfRow[]): string[] {
+  const segments = scaleSegments(completed);
+  if (!segments.some((segment) => segment.scale === "alpenglow")) {
+    return [
+      `- Total vote credits: \`${fmtInt(sum(completed.map((r) => r.voteCredits)))}\``,
+      `- Avg TVC % of max: \`${fmtPct(average(completed.map((r) => r.tvcPctOfMax)))}\``,
+    ];
+  }
+  return segments.flatMap((segment) => {
+    const scope = `${SCALE_LABEL[segment.scale]}, epochs \`${segment.firstEpoch}-${segment.lastEpoch}\``;
+    const unit = segment.scale === "alpenglow" ? " lamports of nominal vote reward" : "";
+    return [
+      `- Total vote credits (${scope}): \`${fmtInt(sum(segment.rows.map((r) => r.voteCredits)))}\`${unit}`,
+      `- Avg TVC % of max (${scope}): \`${fmtPct(average(segment.rows.map((r) => r.tvcPctOfMax)))}\``,
+    ];
+  });
 }
 
 export function renderCsv(rows: PerfRow[]): string {
@@ -329,6 +404,7 @@ export function renderCsv(rows: PerfRow[]): string {
     "skip_rate_pct",
     "commission_pct",
     "mev_commission_pct",
+    "credit_scale",
     "in_progress",
   ];
   const body = rows.map((row) =>
@@ -344,6 +420,7 @@ export function renderCsv(rows: PerfRow[]): string {
       row.skipRatePct === null ? "" : row.skipRatePct.toFixed(4),
       row.commissionPct ?? "",
       row.mevCommissionPct ?? "",
+      row.creditScale,
       row.inProgress,
     ].join(","),
   );

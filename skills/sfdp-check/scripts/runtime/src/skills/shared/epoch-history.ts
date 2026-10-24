@@ -1,6 +1,13 @@
 import { fetchJson } from './http';
 
 /**
+ * First mainnet epoch under Alpenglow (2026-10-21; migration slot 459,653,000, 5,000 slots
+ * into the epoch). VAT starts here, and vote credits change from TowerBFT credits to
+ * lamports of nominal vote reward.
+ */
+export const ALPENGLOW_FIRST_EPOCH = 1064;
+
+/**
  * Revenue and performance share one contiguous window ending at lastEpoch. Rows that begin
  * after firstEpoch shorten the window, and callers disclose the unavailable epochs. That is
  * expected for a newer validator, but upstream rows missing at the start of the window look

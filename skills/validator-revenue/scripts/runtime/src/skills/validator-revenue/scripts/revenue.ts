@@ -2,7 +2,7 @@
 
 import { localIso, localTimeZone } from "../../shared/time";
 
-import { fetchSvtHistory, unavailableEpochsNote, leaderSkipRatePct } from "../../shared/epoch-history";
+import { fetchSvtHistory, unavailableEpochsNote, leaderSkipRatePct, ALPENGLOW_FIRST_EPOCH } from "../../shared/epoch-history";
 import { lamportsToSol, LAMPORTS_PER_SOL } from "../../shared/amounts";
 
 import { fetchJson, fetchOptionalJson } from "../../shared/http";
@@ -269,8 +269,8 @@ const MARINADE_BONDS_BASE_URL = "https://validator-bonds-api.marinade.finance";
 
 const MARINADE_BOND_TYPES = ["bidding", "institutional"] as const;
 const BASIS_POINTS_DENOMINATOR = 10_000n;
-/** First mainnet epoch under Alpenglow (2026-10-21); VAT is 0 before it by definition. */
-export const ALPENGLOW_FIRST_EPOCH = 1064;
+// VAT is 0 before the first Alpenglow epoch by definition.
+export { ALPENGLOW_FIRST_EPOCH };
 const VAT_REWARD_TYPE = "VATDebit";
 
 function usage(): never {
