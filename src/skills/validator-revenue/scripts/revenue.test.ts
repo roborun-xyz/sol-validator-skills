@@ -16,6 +16,7 @@ import {
   vatDebitFromSvt,
   vatNotes,
   ALPENGLOW_FIRST_EPOCH,
+  withDeprecatedAliases,
 } from "./revenue";
 
 const BAM_PROGRAM = "BoostxbPp2ENYHGcTLYt1obpcY13HE4NojdqNWdzqSSb";
@@ -232,6 +233,36 @@ describe("Markdown layout", () => {
     expect(columns(header!)).toBe(13);
     expect(columns(body!)).toBe(13);
     expect(body).toContain("2.000000 (paid)");
+  });
+});
+
+describe("block fee rewards", () => {
+  // SVT votingReward equals the identity's getBlock "Fee" rewards (verified for epochs 1063-1066), so it is labelled as block fees.
+  const row = { ...totals([]), epoch: 1066, blockFeeRewardSol: 3.571743478, commissionRewardSol: 0.832936742 };
+
+  test("Markdown labels the column and total as block fees, never voting reward", () => {
+    const md = renderMarkdown({ voteAccount: TEST_VOTE, currentEpoch: 1067, firstEpoch: 1066, lastEpoch: 1066, rows: [row], hasMarinadeBond: false, marinadeBondAccounts: [] });
+    const header = md.split("\n").find(line => line.startsWith("| Epoch | Stake SOL"));
+    expect(header).toContain("| Block Fees |");
+    expect(md).toContain("- Block fee rewards (leader): `3.571743478 SOL`");
+    expect(md).toContain("gross = block fee rewards (leader) + commissionReward");
+    expect(md).toContain("rewards of type Fee");
+    expect(md.toLowerCase()).not.toContain("voting reward");
+  });
+
+  test("CSV uses block_fee_reward_sol and keeps the deprecated voting_reward_sol alias with the same value", () => {
+    const csv = renderCsv([row], false).split("\n").map(line => line.split(","));
+    expect(csv[0]?.length).toBe(csv[1]?.length);
+    expect(csv[1]?.[csv[0]!.indexOf("block_fee_reward_sol")]).toBe("3.571743478");
+    expect(csv[0]?.at(-1)).toBe("voting_reward_sol");
+    expect(csv[1]?.at(-1)).toBe("3.571743478");
+  });
+
+  test("JSON rows gain the deprecated votingRewardSol alias without changing the canonical field", () => {
+    const aliased = withDeprecatedAliases(row);
+    expect(aliased.blockFeeRewardSol).toBe(3.571743478);
+    expect(aliased.votingRewardSol).toBe(3.571743478);
+    expect('votingRewardSol' in row).toBe(false);
   });
 });
 

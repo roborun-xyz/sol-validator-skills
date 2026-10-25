@@ -219,7 +219,7 @@ type RevenueRow = {
   epoch: number;
   stakeSol: number;
   commissionPct: number | null;
-  votingRewardSol: number;
+  blockFeeRewardSol: number;
   commissionRewardSol: number;
   jitoMevRevenueSol: number;
   jitoCommissionBps: number | null;
@@ -875,7 +875,8 @@ async function collectRows(
     ),
   ]);
   const rows = svtRows.map((row): RevenueRow => {
-    const votingReward = toLamports(row.votingReward);
+    // SVT `votingReward` is the identity's leader block fee rewards (getBlock rewardType "Fee"), not a vote reward.
+    const blockFeeReward = toLamports(row.votingReward);
     const commissionReward = toLamports(row.commissionReward);
     const svtJitoInflow = toLamports(row.jitoReward);
     const jitoCommissionReward = jitoCommissionRewards.get(row.epoch);
@@ -902,7 +903,7 @@ async function collectRows(
       throw new Error(`Missing BAM Boost claim result for epoch ${row.epoch}.`);
     }
     const baseGrossRevenue =
-      votingReward + commissionReward + jitoReward + votingCompensation;
+      blockFeeReward + commissionReward + jitoReward + votingCompensation;
     const grossRevenueSol =
       lamportsToSol(baseGrossRevenue) + bamBoostConversion.rewardSol;
     const netRevenueSol =
@@ -914,7 +915,7 @@ async function collectRows(
     const stakeSol = stakeLamportsToSol(row.totalStake);
     const blocksProduced = Math.round(toNumber(row.leaderSlotsDone));
     const leaderSlots = Math.round(toNumber(row.leaderSlotsTotal));
-    const revenueBeforeComp = votingReward + commissionReward + jitoReward;
+    const revenueBeforeComp = blockFeeReward + commissionReward + jitoReward;
     const revenueBeforeCompSol =
       lamportsToSol(revenueBeforeComp) + bamBoostConversion.rewardSol;
     const preCompLamportsPerKiloStake =
@@ -926,7 +927,7 @@ async function collectRows(
       epoch: row.epoch,
       stakeSol,
       commissionPct: row.fee === undefined ? null : toNumber(row.fee),
-      votingRewardSol: roundSol(lamportsToSol(votingReward)),
+      blockFeeRewardSol: roundSol(lamportsToSol(blockFeeReward)),
       commissionRewardSol: roundSol(lamportsToSol(commissionReward)),
       jitoMevRevenueSol: roundSol(
         lamportsToSol(jitoCommissionReward.mevRevenue),
@@ -996,7 +997,7 @@ export function totals(rows: RevenueRow[]): RevenueRow {
   const total = rows.reduce(
     (acc, row) => {
       acc.stakeSol = row.stakeSol;
-      acc.votingRewardSol += row.votingRewardSol;
+      acc.blockFeeRewardSol += row.blockFeeRewardSol;
       acc.commissionRewardSol += row.commissionRewardSol;
       acc.jitoMevRevenueSol += row.jitoMevRevenueSol;
       acc.jitoRewardSol += row.jitoRewardSol;
@@ -1025,7 +1026,7 @@ export function totals(rows: RevenueRow[]): RevenueRow {
       epoch: 0,
       stakeSol: 0,
       commissionPct: null,
-      votingRewardSol: 0,
+      blockFeeRewardSol: 0,
       commissionRewardSol: 0,
       jitoMevRevenueSol: 0,
       jitoCommissionBps: null,
@@ -1069,7 +1070,7 @@ export function totals(rows: RevenueRow[]): RevenueRow {
 
   return {
     ...total,
-    votingRewardSol: roundSol(total.votingRewardSol),
+    blockFeeRewardSol: roundSol(total.blockFeeRewardSol),
     commissionRewardSol: roundSol(total.commissionRewardSol),
     jitoMevRevenueSol: roundSol(total.jitoMevRevenueSol),
     jitoRewardSol: roundSol(total.jitoRewardSol),
@@ -1118,6 +1119,19 @@ export function bamBoostIdentityNote(rows: Array<Pick<RevenueRow, "epoch" | "bam
   return [`BAM Boost identity for epochs \`${ranges.join(", ")}\` came from that epoch's JPool/SVT history row because Trillium's validator history does not cover them. The row holds one identity per epoch, so an identity change inside an epoch is not represented.`];
 }
 
+export const BLOCK_FEE_DEFINITION =
+  "Block Fees are the validator identity's leader block fee rewards (Solana `getBlock` rewards of type Fee over its produced slots), published by JPool/SVT under the field name votingReward. They are not vote rewards: TowerBFT vote credits and Alpenglow vote rewards are paid through epoch inflation and reach the operator only as Commission.";
+
+/** Deprecated output names kept for one release so existing consumers can migrate. */
+export const DEPRECATED_FIELDS = {
+  votingRewardSol: "Deprecated alias of blockFeeRewardSol (CSV voting_reward_sol of block_fee_reward_sol); it was always leader block fee rewards, not vote rewards. Will be removed in a future release.",
+} as const;
+
+/** Adds deprecated JSON aliases without changing the canonical row. */
+export function withDeprecatedAliases<T extends Pick<RevenueRow, "blockFeeRewardSol">>(row: T): T & { votingRewardSol: number } {
+  return { ...row, votingRewardSol: row.blockFeeRewardSol };
+}
+
 const VAT_DEFINITION =
   "VAT (Alpenglow validator admission ticket, from epoch 1064) is attributed to the epoch in which it is debited: the 0.8 SOL debited from the vote account at the start of epoch N (to admit it for epoch N+1) is a cost of epoch N. Source per epoch: JPool/SVT vatDebit when published, otherwise the vote account's VATDebit reward in the first confirmed block of that epoch; epochs before 1064 have no VAT. Vote transaction fees are TowerBFT vote costs and are partial in epoch 1064.";
 
@@ -1159,11 +1173,11 @@ export function renderMarkdown(result: {
   const jitoDefinition =
     "Jito operator revenue is calculated from Jito's official validator rewards as floor(mevRevenue × mevCommissionBps / 10,000). The raw JPool/SVT jitoReward inflow is retained for reconciliation only; any difference is excluded from gross and net because it can include returned Tip Distribution Account rent.";
   const revenueDefinition = result.hasMarinadeBond
-    ? "SOL revenue definition used: gross = votingReward + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - vote transaction fees (TowerBFT; partial in 1064) - VAT - reported Marinade bond payment - estimated Marinade payment. Reported payments sum ValidatorBond-funded protected-events. When an epoch has no published ValidatorBond-funded Bidding events globally, bidding-bond costs are estimated from that epoch's SAM effectiveBid × marinadeActivatedStakeSol / 1000. Estimates use auction snapshots, exclude additional penalties/PSR and can differ from final settlement. no_record means no matching published payment, not verified zero liability; global publication can be partial. This excludes other off-chain payments, infrastructure costs, and other operating costs."
-    : "SOL revenue definition used: gross = votingReward + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - vote transaction fees (TowerBFT; partial in 1064) - VAT. No Marinade validator bond was found, so bond payments are not included. This excludes off-chain payments, infrastructure costs, and other operating costs.";
+    ? "SOL revenue definition used: gross = block fee rewards (leader) + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - vote transaction fees (TowerBFT; partial in 1064) - VAT - reported Marinade bond payment - estimated Marinade payment. Reported payments sum ValidatorBond-funded protected-events. When an epoch has no published ValidatorBond-funded Bidding events globally, bidding-bond costs are estimated from that epoch's SAM effectiveBid × marinadeActivatedStakeSol / 1000. Estimates use auction snapshots, exclude additional penalties/PSR and can differ from final settlement. no_record means no matching published payment, not verified zero liability; global publication can be partial. This excludes other off-chain payments, infrastructure costs, and other operating costs."
+    : "SOL revenue definition used: gross = block fee rewards (leader) + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - vote transaction fees (TowerBFT; partial in 1064) - VAT. No Marinade validator bond was found, so bond payments are not included. This excludes off-chain payments, infrastructure costs, and other operating costs.";
   const bondHeader = result.hasMarinadeBond ? " Marinade Bond Payment |" : "";
   const bondDivider = result.hasMarinadeBond ? "---:|" : "";
-  const tableHeader = `| Epoch | Stake SOL | Voting Reward | Commission | Jito Commission | BAM Boost SOL Eq. | Voting Comp | Gross SOL | Vote Tx Fees | VAT |${bondHeader} Net SOL | Blocks |`;
+  const tableHeader = `| Epoch | Stake SOL | Block Fees | Commission | Jito Commission | BAM Boost SOL Eq. | Voting Comp | Gross SOL | Vote Tx Fees | VAT |${bondHeader} Net SOL | Blocks |`;
   const tableDivider = `|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|${bondDivider}---:|---:|`;
   const detailHeader =
     "| Epoch | Jito Commission bps | Excluded SVT Jito Inflow | BAM Claim Epoch | BAM Allocated JitoSOL | JitoSOL/SOL | Rate Time (UTC) | Rate Time (local) | BAM Claimed SOL Eq. | BAM Status | Pre-Comp Lamports / 1k Stake |";
@@ -1173,6 +1187,8 @@ export function renderMarkdown(result: {
     "",
     ...unavailableEpochsNote(result.requestedFirstEpoch ?? result.firstEpoch, result.firstEpoch, result.lastEpoch).flatMap((note) => [note, ""]),
     revenueDefinition,
+    "",
+    BLOCK_FEE_DEFINITION,
     "",
     VAT_DEFINITION,
     "",
@@ -1198,7 +1214,7 @@ export function renderMarkdown(result: {
     const jitoCommission =
       row.jitoCommissionBps === null ? `${fmtSol(row.jitoRewardSol)} (${row.jitoRewardStatus})` : fmtSol(row.jitoRewardSol);
     lines.push(
-      `| ${row.epoch} | ${fmtInt(row.stakeSol)} | ${fmtSol(row.votingRewardSol)} | ${fmtSol(row.commissionRewardSol)} | ${jitoCommission} | ${fmtSol(row.bamBoostAllocatedSolEquivalent)} | ${fmtSol(row.votingCompensationSol)} | ${fmtSol(row.grossRevenueSol)} | ${fmtSol(row.votingFeeSol)} | ${vatCell}${admission} |${bondCell} ${fmtSol(row.netRevenueSol)} | ${row.blocksProduced}/${row.leaderSlots} |`,
+      `| ${row.epoch} | ${fmtInt(row.stakeSol)} | ${fmtSol(row.blockFeeRewardSol)} | ${fmtSol(row.commissionRewardSol)} | ${jitoCommission} | ${fmtSol(row.bamBoostAllocatedSolEquivalent)} | ${fmtSol(row.votingCompensationSol)} | ${fmtSol(row.grossRevenueSol)} | ${fmtSol(row.votingFeeSol)} | ${vatCell}${admission} |${bondCell} ${fmtSol(row.netRevenueSol)} | ${row.blocksProduced}/${row.leaderSlots} |`,
     );
     const bamRate = row.bamBoostJitoSolToSolRate === null ? "-" : row.bamBoostJitoSolToSolRate.toFixed(9);
     detailLines.push(
@@ -1226,7 +1242,7 @@ export function renderMarkdown(result: {
     "",
     `Totals for epochs \`${result.firstEpoch}-${result.lastEpoch}\`:`,
     "",
-    `- Voting reward: \`${fmtTotal(total.votingRewardSol)} SOL\``,
+    `- Block fee rewards (leader): \`${fmtTotal(total.blockFeeRewardSol)} SOL\``,
     `- Commission reward: \`${fmtTotal(total.commissionRewardSol)} SOL\``,
     `- Jito operator commission reward: \`${fmtTotal(total.jitoRewardSol)} SOL\``,
     `- Excluded SVT Jito inflow: \`${fmtTotal(total.excludedSvtJitoInflowSol)} SOL\``,
@@ -1262,7 +1278,7 @@ export function renderCsv(rows: RevenueRow[], includeMarinadeBond: boolean): str
     "epoch",
     "stake_sol",
     "commission_pct",
-    "voting_reward_sol",
+    "block_fee_reward_sol",
     "commission_reward_sol",
     "jito_mev_revenue_sol",
     "jito_commission_bps",
@@ -1296,13 +1312,14 @@ export function renderCsv(rows: RevenueRow[], includeMarinadeBond: boolean): str
     "blocks",
     "leader_slots",
     "skip_rate_pct",
+    "voting_reward_sol", // Deprecated alias of block_fee_reward_sol.
   ];
   const body = rows.map((row) =>
     [
       row.epoch,
       row.stakeSol,
       row.commissionPct ?? "",
-      row.votingRewardSol.toFixed(9),
+      row.blockFeeRewardSol.toFixed(9),
       row.commissionRewardSol.toFixed(9),
       row.jitoMevRevenueSol.toFixed(9),
       row.jitoCommissionBps ?? "",
@@ -1336,6 +1353,7 @@ export function renderCsv(rows: RevenueRow[], includeMarinadeBond: boolean): str
       row.blocksProduced,
       row.leaderSlots,
       row.skipRate,
+      row.blockFeeRewardSol.toFixed(9),
     ].join(","),
   );
   return [header.join(","), ...body].join("\n");
@@ -1352,7 +1370,10 @@ async function main() {
   const payload = {
     voteAccount,
     ...result,
-    totals: totals(result.rows),
+    rows: result.rows.map(withDeprecatedAliases),
+    totals: withDeprecatedAliases(totals(result.rows)),
+    blockFeeDefinition: BLOCK_FEE_DEFINITION,
+    deprecatedFields: DEPRECATED_FIELDS,
     vatAttribution: "VAT debited at the start of epoch N (admission for N+1) is attributed to epoch N.",
     vatNotes: vatNotes(result.rows),
   };
