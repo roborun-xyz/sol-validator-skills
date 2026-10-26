@@ -19,6 +19,16 @@ export { verifyBamBoostClaimStatusAccount, deriveBamBoostClaimStatusAddress } fr
 
 import { parseEpochQueryArgs, EPOCH_QUERY_HELP, type EpochQueryOptions as Options } from "../../shared/cli";
 
+import {
+  fetchDoubleZeroRewards,
+  formatTokenAmount,
+  retryingRpc,
+  type DoubleZeroEpoch,
+  type DoubleZeroReport,
+  type DoubleZeroStatus,
+  type DoubleZeroTransfer,
+} from "./doublezero";
+
 
 
 type TrilliumRow = {
@@ -258,6 +268,24 @@ type RevenueRow = {
   blocksProduced: number;
   leaderSlots: number;
   skipRate: string;
+  // DoubleZero 2Z rewards by receipt epoch, in 2Z token units. Never part of gross or net SOL.
+  doubleZeroReward2z: number;
+  doubleZeroReward2zRaw: string;
+  doubleZeroRewardStatus: DoubleZeroStatus | "";
+  doubleZeroPublisher2z: number;
+  doubleZeroShredOracle2z: number;
+  doubleZeroRewardTxCount: number;
+  doubleZeroRewardLabels: string;
+  doubleZeroUnclassifiedInflow2z: number;
+  doubleZeroUnclassifiedOutflow2z: number;
+  doubleZeroDecimals: number | null;
+  doubleZeroSources: DoubleZeroSources | null;
+  doubleZeroTransactions: DoubleZeroTransfer[];
+};
+
+type DoubleZeroSources = {
+  publisher: { amount2z: number; amountRaw: string; txCount: number; rewardMonths: string[] };
+  shredOracle: { amount2z: number; amountRaw: string; txCount: number; rewardEpochs: string[] };
 };
 
 const TRILLIUM_BASE_URL = "https://api.trillium.so/validator_rewards";
@@ -838,6 +866,7 @@ export async function fetchMarinadeBondCosts(
 async function collectRows(
   opts: Options,
   voteAccount: string,
+  liveIdentity: string,
 ): Promise<{
   currentEpoch: number;
   requestedFirstEpoch: number;
@@ -846,6 +875,7 @@ async function collectRows(
   rows: RevenueRow[];
   hasMarinadeBond: boolean;
   marinadeBondAccounts: MarinadeBondRecord[];
+  doubleZero: DoubleZeroReport;
 }> {
   const epochInfo = await rpc<{ epoch: number }>(opts.rpcUrl, "getEpochInfo");
   const currentEpoch = epochInfo.epoch;
@@ -864,7 +894,9 @@ async function collectRows(
       fetchBamBoostRewards(voteAccount, firstEpoch, lastEpoch, svtIdentityByEpoch),
       fetchJitoCommissionRewards(voteAccount, firstEpoch, lastEpoch),
     ]);
-  const [bamBoostConversions, bamBoostClaims, vatDebits] = await Promise.all([
+  // Every identity the validator used in the window, plus the live one, may hold 2Z rewards.
+  const doubleZeroIdentities = [...new Set([liveIdentity, ...svtIdentityByEpoch.values()])];
+  const [bamBoostConversions, bamBoostClaims, vatDebits, doubleZero] = await Promise.all([
     fetchBamBoostConversions(opts.rpcUrl, bamBoostRewards),
     fetchBamBoostClaims(opts.rpcUrl, bamBoostRewards),
     fetchVatDebits(
@@ -873,6 +905,7 @@ async function collectRows(
       new Map(svtRows.map((row) => [row.epoch, row.vatDebit])),
       svtRows.map((row) => row.epoch),
     ),
+    fetchDoubleZeroRewards(retryingRpc(opts.rpcUrl), doubleZeroIdentities, firstEpoch, lastEpoch),
   ]);
   const rows = svtRows.map((row): RevenueRow => {
     // SVT `votingReward` is the identity's leader block fee rewards (getBlock rewardType "Fee"), not a vote reward.
@@ -979,6 +1012,7 @@ async function collectRows(
       leaderSlots,
       // Empty unless both leader-slot counts are present; a missing count is not 100% skipped.
       skipRate: leaderSkipRatePct(row.leaderSlotsTotal, row.leaderSlotsDone)?.toFixed(4) ?? "",
+      ...doubleZeroFields(doubleZero.epochs.get(row.epoch), doubleZero.decimals),
     };
   });
 
@@ -990,6 +1024,43 @@ async function collectRows(
     rows,
     hasMarinadeBond: marinadeBondCosts.hasBond,
     marinadeBondAccounts: marinadeBondCosts.bondAccounts,
+    doubleZero,
+  };
+}
+
+/** Row fields for one receipt epoch; a missing epoch result is `unavailable`, never zero. */
+export function doubleZeroFields(epoch: DoubleZeroEpoch | undefined, decimals: number | null): Pick<RevenueRow,
+  "doubleZeroReward2z" | "doubleZeroReward2zRaw" | "doubleZeroRewardStatus" | "doubleZeroPublisher2z" | "doubleZeroShredOracle2z" |
+  "doubleZeroRewardTxCount" | "doubleZeroRewardLabels" | "doubleZeroUnclassifiedInflow2z" | "doubleZeroUnclassifiedOutflow2z" |
+  "doubleZeroDecimals" | "doubleZeroSources" | "doubleZeroTransactions"> {
+  const ui = (raw: bigint) => decimals === null ? 0 : Number(formatTokenAmount(raw, decimals));
+  if (!epoch || decimals === null) {
+    return {
+      doubleZeroReward2z: 0, doubleZeroReward2zRaw: "0", doubleZeroRewardStatus: "unavailable", doubleZeroPublisher2z: 0,
+      doubleZeroShredOracle2z: 0, doubleZeroRewardTxCount: 0, doubleZeroRewardLabels: "", doubleZeroUnclassifiedInflow2z: 0,
+      doubleZeroUnclassifiedOutflow2z: 0, doubleZeroDecimals: decimals, doubleZeroSources: null, doubleZeroTransactions: [],
+    };
+  }
+  const labels = [
+    ...epoch.publisherLabels.map((label) => `publisher ${label}`),
+    ...epoch.shredOracleLabels.map((label) => `shred-oracle ${label}`),
+  ];
+  return {
+    doubleZeroReward2z: ui(epoch.receivedRaw),
+    doubleZeroReward2zRaw: epoch.receivedRaw.toString(),
+    doubleZeroRewardStatus: epoch.status,
+    doubleZeroPublisher2z: ui(epoch.publisherRaw),
+    doubleZeroShredOracle2z: ui(epoch.shredOracleRaw),
+    doubleZeroRewardTxCount: epoch.publisherTxCount + epoch.shredOracleTxCount,
+    doubleZeroRewardLabels: labels.join("; "),
+    doubleZeroUnclassifiedInflow2z: ui(epoch.unclassifiedInflowRaw),
+    doubleZeroUnclassifiedOutflow2z: ui(epoch.unclassifiedOutflowRaw),
+    doubleZeroDecimals: decimals,
+    doubleZeroSources: {
+      publisher: { amount2z: ui(epoch.publisherRaw), amountRaw: epoch.publisherRaw.toString(), txCount: epoch.publisherTxCount, rewardMonths: epoch.publisherLabels },
+      shredOracle: { amount2z: ui(epoch.shredOracleRaw), amountRaw: epoch.shredOracleRaw.toString(), txCount: epoch.shredOracleTxCount, rewardEpochs: epoch.shredOracleLabels },
+    },
+    doubleZeroTransactions: epoch.transfers,
   };
 }
 
@@ -1020,6 +1091,17 @@ export function totals(rows: RevenueRow[]): RevenueRow {
       acc.preCompLamportsPerKiloStake += row.preCompLamportsPerKiloStake;
       acc.blocksProduced += row.blocksProduced;
       acc.leaderSlots += row.leaderSlots;
+      acc.doubleZeroReward2z += row.doubleZeroReward2z;
+      acc.doubleZeroReward2zRaw = (BigInt(acc.doubleZeroReward2zRaw) + BigInt(row.doubleZeroReward2zRaw || "0")).toString();
+      acc.doubleZeroPublisher2z += row.doubleZeroPublisher2z;
+      acc.doubleZeroShredOracle2z += row.doubleZeroShredOracle2z;
+      acc.doubleZeroRewardTxCount += row.doubleZeroRewardTxCount;
+      acc.doubleZeroUnclassifiedInflow2z += row.doubleZeroUnclassifiedInflow2z;
+      acc.doubleZeroUnclassifiedOutflow2z += row.doubleZeroUnclassifiedOutflow2z;
+      if (acc.doubleZeroDecimals === null) acc.doubleZeroDecimals = row.doubleZeroDecimals;
+      if (row.doubleZeroRewardStatus === "unavailable" || acc.doubleZeroRewardStatus === "unavailable") acc.doubleZeroRewardStatus = "unavailable";
+      else if (row.doubleZeroRewardStatus === "received") acc.doubleZeroRewardStatus = "received";
+      else if (row.doubleZeroRewardStatus === "none" && acc.doubleZeroRewardStatus === "") acc.doubleZeroRewardStatus = "none";
       return acc;
     },
     {
@@ -1065,6 +1147,18 @@ export function totals(rows: RevenueRow[]): RevenueRow {
       blocksProduced: 0,
       leaderSlots: 0,
       skipRate: "",
+      doubleZeroReward2z: 0,
+      doubleZeroReward2zRaw: "0",
+      doubleZeroRewardStatus: "" as DoubleZeroStatus | "",
+      doubleZeroPublisher2z: 0,
+      doubleZeroShredOracle2z: 0,
+      doubleZeroRewardTxCount: 0,
+      doubleZeroRewardLabels: "",
+      doubleZeroUnclassifiedInflow2z: 0,
+      doubleZeroUnclassifiedOutflow2z: 0,
+      doubleZeroDecimals: null as number | null,
+      doubleZeroSources: null as DoubleZeroSources | null,
+      doubleZeroTransactions: [] as DoubleZeroTransfer[],
     },
   );
 
@@ -1089,6 +1183,11 @@ export function totals(rows: RevenueRow[]): RevenueRow {
     marinadeBondPaymentSol: roundSol(total.marinadeBondPaymentSol),
     marinadeBondEstimatedPaymentSol: roundSol(total.marinadeBondEstimatedPaymentSol),
     netRevenueSol: roundSol(total.netRevenueSol),
+    doubleZeroReward2z: roundSol(total.doubleZeroReward2z),
+    doubleZeroPublisher2z: roundSol(total.doubleZeroPublisher2z),
+    doubleZeroShredOracle2z: roundSol(total.doubleZeroShredOracle2z),
+    doubleZeroUnclassifiedInflow2z: roundSol(total.doubleZeroUnclassifiedInflow2z),
+    doubleZeroUnclassifiedOutflow2z: roundSol(total.doubleZeroUnclassifiedOutflow2z),
   };
 }
 
@@ -1153,6 +1252,62 @@ export function vatNotes(rows: Array<Pick<RevenueRow, "epoch" | "vatStatus" | "v
   return notes;
 }
 
+export type OptionalSource = "jito" | "bamBoost" | "votingCompensation" | "voteTxFees" | "marinadeBond" | "doubleZero";
+
+export const OPTIONAL_SOURCE_LABELS: Record<OptionalSource, string> = {
+  jito: "Jito MEV commission",
+  bamBoost: "BAM Boost",
+  votingCompensation: "voting compensation",
+  voteTxFees: "vote transaction fees",
+  marinadeBond: "Marinade bond",
+  doubleZero: "DoubleZero 2Z rewards",
+};
+
+export const SOURCE_ACTIVITY_RULE =
+  "Optional sources with no activity in any epoch of the window are omitted from the Markdown tables and totals: Jito when operator commission and the raw JPool/SVT Jito inflow are zero in every epoch; BAM Boost when no epoch is allocated (an in-progress epoch's not_published placeholder is ignored, but not_published for a completed epoch or identity_missing keeps it shown because the allocation is unknown); voting compensation and vote transaction fees when zero in every epoch; Marinade bond when no Marinade validator bond exists; DoubleZero 2Z when no transaction from a known distributor credited the identity in the window (an unavailable scan keeps it shown). JSON keeps every field and lists activeSources/omittedSources; CSV keeps a stable column set.";
+
+/**
+ * Which optional sources had activity in the window. An all-zero source whose zero is unknown
+ * (unpublished or failed data) counts as active so it is never hidden as if it were inactive.
+ */
+export function sourceActivity(
+  rows: RevenueRow[], options: { currentEpoch: number; hasMarinadeBond: boolean },
+): { activeSources: OptionalSource[]; omittedSources: OptionalSource[] } {
+  const active: Record<OptionalSource, boolean> = {
+    jito: rows.some((row) => row.jitoRewardSol !== 0 || row.svtJitoInflowSol !== 0 || row.excludedSvtJitoInflowSol !== 0),
+    bamBoost: rows.some((row) =>
+      row.bamBoostAllocationStatus === "allocated" || row.bamBoostAllocationStatus === "identity_missing" ||
+      (row.bamBoostAllocationStatus === "not_published" && row.epoch !== options.currentEpoch)),
+    votingCompensation: rows.some((row) => row.votingCompensationSol !== 0),
+    voteTxFees: rows.some((row) => row.votingFeeSol !== 0),
+    marinadeBond: options.hasMarinadeBond,
+    doubleZero: rows.some((row) => row.doubleZeroRewardStatus === "unavailable" || row.doubleZeroRewardTxCount > 0 || row.doubleZeroReward2z !== 0),
+  };
+  const sources = Object.keys(OPTIONAL_SOURCE_LABELS) as OptionalSource[];
+  return { activeSources: sources.filter((source) => active[source]), omittedSources: sources.filter((source) => !active[source]) };
+}
+
+export const DOUBLEZERO_DEFINITION =
+  "DoubleZero 2Z rewards are attributed by receipt epoch: the epoch containing the slot of the transaction that credited the validator identity's 2Z token accounts. Amounts are the identity-owned 2Z balance change (pre/post token balances) in transactions that invoke the Solana publisher rewards distributor (J9gupbyffs4XAoKn5NrJ4hrbdqW5ZfvMDaaas3FtH8yC) or the shred oracle distributor (dzshrr3yL57SB13sJPYHYo3TV8Bo1i1FxkyrZr3bKNE); logs and memos only label the reward period. Publisher rewards are paid in monthly batches, so receipt epochs are lumpy and do not match the epochs in which the rewards were earned. Other 2Z balance changes are shown as unclassified. 2Z is reported in token units and is NOT included in gross or net SOL: no verified historical 2Z/SOL price is used.";
+
+function fmt2z(value: number, decimals: number | null): string {
+  return value.toFixed(decimals ?? 8);
+}
+
+/** Notes for the DoubleZero scan: unavailable data and unclassified 2Z movements. */
+export function doubleZeroNotes(rows: RevenueRow[], error: string | null = null): string[] {
+  const notes: string[] = [];
+  const unavailable = rows.filter((row) => row.doubleZeroRewardStatus === "unavailable").map((row) => row.epoch);
+  if (unavailable.length) {
+    notes.push(`WARNING: DoubleZero 2Z rewards are unavailable for epoch(s) \`${unavailable.join(", ")}\`${error ? ` (${error})` : ""}; they are unknown, not zero.`);
+  }
+  const unclassified = rows.filter((row) => row.doubleZeroUnclassifiedInflow2z !== 0 || row.doubleZeroUnclassifiedOutflow2z !== 0);
+  for (const row of unclassified) {
+    notes.push(`Epoch ${row.epoch}: unclassified 2Z balance changes on the identity's 2Z accounts (not from a known distributor; not counted as rewards): in ${fmt2z(row.doubleZeroUnclassifiedInflow2z, row.doubleZeroDecimals)} 2Z, out ${fmt2z(row.doubleZeroUnclassifiedOutflow2z, row.doubleZeroDecimals)} 2Z.`);
+  }
+  return notes;
+}
+
 export function renderMarkdown(result: {
   voteAccount: string;
   currentEpoch: number;
@@ -1162,8 +1317,11 @@ export function renderMarkdown(result: {
   rows: RevenueRow[];
   hasMarinadeBond: boolean;
   marinadeBondAccounts: MarinadeBondRecord[];
+  doubleZero?: Pick<DoubleZeroReport, "error">;
 }): string {
   const total = totals(result.rows);
+  const { activeSources, omittedSources } = sourceActivity(result.rows, result);
+  const on = (source: OptionalSource) => activeSources.includes(source);
   const epochCoverage =
     result.lastEpoch === result.currentEpoch
       ? `this covers epochs \`${result.firstEpoch}-${result.lastEpoch}\`, including current in-progress epoch \`${result.currentEpoch}\``
@@ -1173,70 +1331,100 @@ export function renderMarkdown(result: {
   const jitoDefinition =
     "Jito operator revenue is calculated from Jito's official validator rewards as floor(mevRevenue × mevCommissionBps / 10,000). The raw JPool/SVT jitoReward inflow is retained for reconciliation only; any difference is excluded from gross and net because it can include returned Tip Distribution Account rent.";
   const revenueDefinition = result.hasMarinadeBond
-    ? "SOL revenue definition used: gross = block fee rewards (leader) + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - vote transaction fees (TowerBFT; partial in 1064) - VAT - reported Marinade bond payment - estimated Marinade payment. Reported payments sum ValidatorBond-funded protected-events. When an epoch has no published ValidatorBond-funded Bidding events globally, bidding-bond costs are estimated from that epoch's SAM effectiveBid × marinadeActivatedStakeSol / 1000. Estimates use auction snapshots, exclude additional penalties/PSR and can differ from final settlement. no_record means no matching published payment, not verified zero liability; global publication can be partial. This excludes other off-chain payments, infrastructure costs, and other operating costs."
-    : "SOL revenue definition used: gross = block fee rewards (leader) + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - vote transaction fees (TowerBFT; partial in 1064) - VAT. No Marinade validator bond was found, so bond payments are not included. This excludes off-chain payments, infrastructure costs, and other operating costs.";
-  const bondHeader = result.hasMarinadeBond ? " Marinade Bond Payment |" : "";
-  const bondDivider = result.hasMarinadeBond ? "---:|" : "";
-  const tableHeader = `| Epoch | Stake SOL | Block Fees | Commission | Jito Commission | BAM Boost SOL Eq. | Voting Comp | Gross SOL | Vote Tx Fees | VAT |${bondHeader} Net SOL | Blocks |`;
-  const tableDivider = `|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|${bondDivider}---:|---:|`;
-  const detailHeader =
-    "| Epoch | Jito Commission bps | Excluded SVT Jito Inflow | BAM Claim Epoch | BAM Allocated JitoSOL | JitoSOL/SOL | Rate Time (UTC) | Rate Time (local) | BAM Claimed SOL Eq. | BAM Status | Pre-Comp Lamports / 1k Stake |";
-  const detailDivider = "|---:|---:|---:|---:|---:|---:|:---|:---|---:|:---|---:|";
+    ? "SOL revenue definition used: gross = block fee rewards (leader) + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - vote transaction fees (TowerBFT; partial in 1064) - VAT - reported Marinade bond payment - estimated Marinade payment. Reported payments sum ValidatorBond-funded protected-events. When an epoch has no published ValidatorBond-funded Bidding events globally, bidding-bond costs are estimated from that epoch's SAM effectiveBid × marinadeActivatedStakeSol / 1000. Estimates use auction snapshots, exclude additional penalties/PSR and can differ from final settlement. no_record means no matching published payment, not verified zero liability; global publication can be partial. DoubleZero 2Z rewards are reported separately and are not part of gross or net. This excludes other off-chain payments, infrastructure costs, and other operating costs."
+    : "SOL revenue definition used: gross = block fee rewards (leader) + commissionReward + Jito operator commission + votingCompensation + BAM Boost converted SOL; net = gross - vote transaction fees (TowerBFT; partial in 1064) - VAT. No Marinade validator bond was found, so bond payments are not included. DoubleZero 2Z rewards are reported separately and are not part of gross or net. This excludes off-chain payments, infrastructure costs, and other operating costs.";
+
+  type Column = { header: string; align?: string; cell: (row: RevenueRow) => string };
+  const vatCell = (row: RevenueRow) => {
+    const cell = PROVISIONAL_VAT_STATUSES.has(row.vatStatus)
+      ? `${fmtSol(row.vatSol)} (${row.vatStatus}, PROVISIONAL)`
+      : row.vatStatus === "pre_alpenglow" ? fmtSol(row.vatSol) : `${fmtSol(row.vatSol)} (${row.vatStatus})`;
+    return cell + (row.admissionFailure ? " ADMISSION FAILURE" : "");
+  };
+  const mainColumns: Array<Column | false> = [
+    { header: "Epoch", cell: (row) => String(row.epoch) },
+    { header: "Stake SOL", cell: (row) => fmtInt(row.stakeSol) },
+    { header: "Block Fees", cell: (row) => fmtSol(row.blockFeeRewardSol) },
+    { header: "Commission", cell: (row) => fmtSol(row.commissionRewardSol) },
+    on("jito") && { header: "Jito Commission", cell: (row) => row.jitoCommissionBps === null ? `${fmtSol(row.jitoRewardSol)} (${row.jitoRewardStatus})` : fmtSol(row.jitoRewardSol) },
+    on("bamBoost") && { header: "BAM Boost SOL Eq.", cell: (row) => fmtSol(row.bamBoostAllocatedSolEquivalent) },
+    on("votingCompensation") && { header: "Voting Comp", cell: (row) => fmtSol(row.votingCompensationSol) },
+    { header: "Gross SOL", cell: (row) => fmtSol(row.grossRevenueSol) },
+    on("voteTxFees") && { header: "Vote Tx Fees", cell: (row) => fmtSol(row.votingFeeSol) },
+    { header: "VAT", cell: vatCell },
+    on("marinadeBond") && { header: "Marinade Bond Payment", cell: (row) => row.marinadeBondPaymentStatus === "estimated"
+      ? `${fmtSol(row.marinadeBondPaymentSol)} reported + ${fmtSol(row.marinadeBondEstimatedPaymentSol)} estimated`
+      : `${fmtSol(row.marinadeBondPaymentSol)} (${row.marinadeBondPaymentStatus})` },
+    { header: "Net SOL", cell: (row) => fmtSol(row.netRevenueSol) },
+    { header: "Blocks", cell: (row) => `${row.blocksProduced}/${row.leaderSlots}` },
+  ];
+  const detailColumns: Array<Column | false> = [
+    { header: "Epoch", cell: (row) => String(row.epoch) },
+    on("jito") && { header: "Jito Commission bps", cell: (row) => String(row.jitoCommissionBps ?? row.jitoRewardStatus) },
+    on("jito") && { header: "Excluded SVT Jito Inflow", cell: (row) => fmtSol(row.excludedSvtJitoInflowSol) },
+    on("bamBoost") && { header: "BAM Claim Epoch", cell: (row) => String(row.bamBoostClaimEpoch) },
+    on("bamBoost") && { header: "BAM Allocated JitoSOL", cell: (row) => fmtSol(row.bamBoostAllocatedJitoSol) },
+    on("bamBoost") && { header: "JitoSOL/SOL", cell: (row) => row.bamBoostJitoSolToSolRate === null ? "-" : row.bamBoostJitoSolToSolRate.toFixed(9) },
+    on("bamBoost") && { header: "Rate Time (UTC)", align: ":---", cell: (row) => row.bamBoostRateTimestampUtc || "-" },
+    on("bamBoost") && { header: "Rate Time (local)", align: ":---", cell: (row) => row.bamBoostRateTimestampLocal || "-" },
+    on("bamBoost") && { header: "BAM Claimed SOL Eq.", cell: (row) => fmtSol(row.bamBoostClaimedSolEquivalent) },
+    on("bamBoost") && { header: "BAM Status", align: ":---", cell: (row) => `${row.bamBoostAllocationStatus}/${row.bamBoostClaimStatus}` },
+    { header: "Pre-Comp Lamports / 1k Stake", cell: (row) => fmtInt(row.preCompLamportsPerKiloStake) },
+  ];
+  const doubleZeroColumns: Column[] = [
+    { header: "Receipt Epoch", cell: (row) => String(row.epoch) },
+    { header: "2Z Received", cell: (row) => fmt2z(row.doubleZeroReward2z, row.doubleZeroDecimals) },
+    { header: "Status", align: ":---", cell: (row) => row.doubleZeroRewardStatus },
+    { header: "Publisher 2Z", cell: (row) => fmt2z(row.doubleZeroPublisher2z, row.doubleZeroDecimals) },
+    { header: "Shred Oracle 2Z", cell: (row) => fmt2z(row.doubleZeroShredOracle2z, row.doubleZeroDecimals) },
+    { header: "Reward Period Labels", align: ":---", cell: (row) => row.doubleZeroRewardLabels || "-" },
+    { header: "Unclassified 2Z In/Out", cell: (row) => `${fmt2z(row.doubleZeroUnclassifiedInflow2z, row.doubleZeroDecimals)}/${fmt2z(row.doubleZeroUnclassifiedOutflow2z, row.doubleZeroDecimals)}` },
+  ];
+  const table = (columns: Array<Column | false>) => {
+    const used = columns.filter((column): column is Column => column !== false);
+    return [
+      `| ${used.map((column) => column.header).join(" | ")} |`,
+      `|${used.map((column) => `${column.align ?? "---:"}|`).join("")}`,
+      ...result.rows.map((row) => `| ${used.map((column) => column.cell(row)).join(" | ")} |`),
+    ];
+  };
+
+  const omissionNote = omittedSources.length
+    ? [`Omitted as having no activity in epochs \`${result.firstEpoch}-${result.lastEpoch}\`: ${omittedSources.map((source) => OPTIONAL_SOURCE_LABELS[source]).join(", ")}. Their columns and totals are left out; JSON keeps every field.`, ""]
+    : [];
   const lines = [
     `As of current epoch \`${result.currentEpoch}\`, ${epochCoverage}.`,
     "",
     ...unavailableEpochsNote(result.requestedFirstEpoch ?? result.firstEpoch, result.firstEpoch, result.lastEpoch).flatMap((note) => [note, ""]),
+    ...omissionNote,
     revenueDefinition,
     "",
     BLOCK_FEE_DEFINITION,
     "",
     VAT_DEFINITION,
     "",
-    jitoDefinition,
+    ...(on("jito") ? [jitoDefinition, ""] : []),
+    ...(on("bamBoost") ? [bamBoostDefinition, ""] : []),
+    ...table(mainColumns),
     "",
-    bamBoostDefinition,
+    on("bamBoost")
+      ? "Per-epoch detail for reconciliation. BAM Boost SOL equivalents use the JitoSOL/SOL rate shown here; the main table's BAM Boost column is the allocated SOL equivalent."
+      : "Per-epoch detail for reconciliation.",
     "",
-    tableHeader,
-    tableDivider,
+    ...table(detailColumns),
   ];
-  const detailLines: string[] = [];
 
-  for (const row of result.rows) {
-    const bondCell = result.hasMarinadeBond
-      ? row.marinadeBondPaymentStatus === "estimated"
-        ? ` ${fmtSol(row.marinadeBondPaymentSol)} reported + ${fmtSol(row.marinadeBondEstimatedPaymentSol)} estimated |`
-        : ` ${fmtSol(row.marinadeBondPaymentSol)} (${row.marinadeBondPaymentStatus}) |`
-      : "";
-    const vatCell = PROVISIONAL_VAT_STATUSES.has(row.vatStatus)
-      ? `${fmtSol(row.vatSol)} (${row.vatStatus}, PROVISIONAL)`
-      : row.vatStatus === "pre_alpenglow" ? fmtSol(row.vatSol) : `${fmtSol(row.vatSol)} (${row.vatStatus})`;
-    const admission = row.admissionFailure ? " ADMISSION FAILURE" : "";
-    const jitoCommission =
-      row.jitoCommissionBps === null ? `${fmtSol(row.jitoRewardSol)} (${row.jitoRewardStatus})` : fmtSol(row.jitoRewardSol);
-    lines.push(
-      `| ${row.epoch} | ${fmtInt(row.stakeSol)} | ${fmtSol(row.blockFeeRewardSol)} | ${fmtSol(row.commissionRewardSol)} | ${jitoCommission} | ${fmtSol(row.bamBoostAllocatedSolEquivalent)} | ${fmtSol(row.votingCompensationSol)} | ${fmtSol(row.grossRevenueSol)} | ${fmtSol(row.votingFeeSol)} | ${vatCell}${admission} |${bondCell} ${fmtSol(row.netRevenueSol)} | ${row.blocksProduced}/${row.leaderSlots} |`,
-    );
-    const bamRate = row.bamBoostJitoSolToSolRate === null ? "-" : row.bamBoostJitoSolToSolRate.toFixed(9);
-    detailLines.push(
-      `| ${row.epoch} | ${row.jitoCommissionBps ?? row.jitoRewardStatus} | ${fmtSol(row.excludedSvtJitoInflowSol)} | ${row.bamBoostClaimEpoch} | ${fmtSol(row.bamBoostAllocatedJitoSol)} | ${bamRate} | ${row.bamBoostRateTimestampUtc || "-"} | ${row.bamBoostRateTimestampLocal || "-"} | ${fmtSol(row.bamBoostClaimedSolEquivalent)} | ${row.bamBoostAllocationStatus}/${row.bamBoostClaimStatus} | ${fmtInt(row.preCompLamportsPerKiloStake)} |`,
-    );
-  }
-
-  lines.push(
-    "",
-    "Per-epoch detail for reconciliation. BAM Boost SOL equivalents use the JitoSOL/SOL rate shown here; the main table's BAM Boost column is the allocated SOL equivalent.",
-    "",
-    detailHeader,
-    detailDivider,
-    ...detailLines,
-  );
-
-  lines.push(...bamBoostIdentityNote(result.rows).flatMap((note) => ["", note]));
+  if (on("bamBoost")) lines.push(...bamBoostIdentityNote(result.rows).flatMap((note) => ["", note]));
   lines.push(...vatNotes(result.rows).flatMap((note) => ["", note]));
 
   for (const row of result.rows.filter(row => row.marinadeBondPaymentStatus === "estimated")) {
     lines.push("", `Epoch ${row.epoch} Marinade estimate: ${row.marinadeActivatedStakeSol} SOL activated stake × effective bid ${row.marinadeEffectiveBid} (SOL per 1,000 SOL) / 1,000 = ${row.marinadeBondEstimatedPaymentSol} SOL. Source: ${row.marinadeEstimateSource}`);
   }
+
+  if (on("doubleZero")) {
+    lines.push("", "DoubleZero 2Z rewards by receipt epoch (token units; not included in gross or net SOL).", "", DOUBLEZERO_DEFINITION, "", ...table(doubleZeroColumns));
+  }
+  lines.push(...doubleZeroNotes(result.rows, result.doubleZero?.error ?? null).flatMap((note) => ["", note]));
 
   lines.push(
     "",
@@ -1244,17 +1432,27 @@ export function renderMarkdown(result: {
     "",
     `- Block fee rewards (leader): \`${fmtTotal(total.blockFeeRewardSol)} SOL\``,
     `- Commission reward: \`${fmtTotal(total.commissionRewardSol)} SOL\``,
-    `- Jito operator commission reward: \`${fmtTotal(total.jitoRewardSol)} SOL\``,
-    `- Excluded SVT Jito inflow: \`${fmtTotal(total.excludedSvtJitoInflowSol)} SOL\``,
-    `- BAM Boost allocated: \`${fmtTotal(total.bamBoostAllocatedJitoSol)} JitoSOL\` = \`${fmtTotal(total.bamBoostAllocatedSolEquivalent)} SOL equivalent\` at the per-epoch historical ratios above`,
-    `- BAM Boost claimed: \`${fmtTotal(total.bamBoostClaimedJitoSol)} JitoSOL\` = \`${fmtTotal(total.bamBoostClaimedSolEquivalent)} SOL equivalent\` at the same historical ratios`,
-    `- Voting compensation: \`${fmtTotal(total.votingCompensationSol)} SOL\``,
-    `- Gross revenue: \`${fmtTotal(total.grossRevenueSol)} SOL\``,
-    `- Vote transaction fees (TowerBFT; partial in 1064): \`${fmtTotal(total.votingFeeSol)} SOL\``,
+  );
+  if (on("jito")) {
+    lines.push(
+      `- Jito operator commission reward: \`${fmtTotal(total.jitoRewardSol)} SOL\``,
+      `- Excluded SVT Jito inflow: \`${fmtTotal(total.excludedSvtJitoInflowSol)} SOL\``,
+    );
+  }
+  if (on("bamBoost")) {
+    lines.push(
+      `- BAM Boost allocated: \`${fmtTotal(total.bamBoostAllocatedJitoSol)} JitoSOL\` = \`${fmtTotal(total.bamBoostAllocatedSolEquivalent)} SOL equivalent\` at the per-epoch historical ratios above`,
+      `- BAM Boost claimed: \`${fmtTotal(total.bamBoostClaimedJitoSol)} JitoSOL\` = \`${fmtTotal(total.bamBoostClaimedSolEquivalent)} SOL equivalent\` at the same historical ratios`,
+    );
+  }
+  if (on("votingCompensation")) lines.push(`- Voting compensation: \`${fmtTotal(total.votingCompensationSol)} SOL\``);
+  lines.push(`- Gross revenue: \`${fmtTotal(total.grossRevenueSol)} SOL\``);
+  if (on("voteTxFees")) lines.push(`- Vote transaction fees (TowerBFT; partial in 1064): \`${fmtTotal(total.votingFeeSol)} SOL\``);
+  lines.push(
     `- VAT (attributed to the debit epoch)${PROVISIONAL_VAT_STATUSES.has(total.vatStatus) ? " (PROVISIONAL: unknown/unverified VAT epochs listed above)" : ""}: \`${fmtTotal(total.vatSol)} SOL\``,
   );
 
-  if (result.hasMarinadeBond) {
+  if (on("marinadeBond")) {
     lines.push(
       `- Marinade bond payment: \`${fmtTotal(total.marinadeBondPaymentSol)} SOL\``,
       `- Marinade estimated payment: \`${fmtTotal(total.marinadeBondEstimatedPaymentSol)} SOL\``,
@@ -1269,6 +1467,11 @@ export function renderMarkdown(result: {
     `- Lamports per 1k stake before voting comp (sum across window): \`${fmtInt(total.preCompLamportsPerKiloStake)}\``,
     `- Blocks produced: \`${fmtInt(total.blocksProduced)} / ${fmtInt(total.leaderSlots)}\` leader slots`,
   );
+  if (on("doubleZero")) {
+    const decimals = total.doubleZeroDecimals;
+    const exact = decimals === null ? fmtTotal(total.doubleZeroReward2z) : formatTokenAmount(BigInt(total.doubleZeroReward2zRaw), decimals);
+    lines.push(`- DoubleZero 2Z received (receipt epochs; separate token line, NOT in gross or net)${total.doubleZeroRewardStatus === "unavailable" ? " (INCOMPLETE: unavailable epochs listed above)" : ""}: \`${exact} 2Z\` (publisher \`${fmt2z(total.doubleZeroPublisher2z, decimals)}\`, shred oracle \`${fmt2z(total.doubleZeroShredOracle2z, decimals)}\`)`);
+  }
 
   return lines.join("\n");
 }
@@ -1312,6 +1515,15 @@ export function renderCsv(rows: RevenueRow[], includeMarinadeBond: boolean): str
     "blocks",
     "leader_slots",
     "skip_rate_pct",
+    "double_zero_reward_2z",
+    "double_zero_reward_2z_raw",
+    "double_zero_reward_status",
+    "double_zero_publisher_2z",
+    "double_zero_shred_oracle_2z",
+    "double_zero_reward_tx_count",
+    "double_zero_reward_labels",
+    "double_zero_unclassified_inflow_2z",
+    "double_zero_unclassified_outflow_2z",
     "voting_reward_sol", // Deprecated alias of block_fee_reward_sol.
   ];
   const body = rows.map((row) =>
@@ -1353,6 +1565,16 @@ export function renderCsv(rows: RevenueRow[], includeMarinadeBond: boolean): str
       row.blocksProduced,
       row.leaderSlots,
       row.skipRate,
+      row.doubleZeroDecimals === null ? "" : formatTokenAmount(BigInt(row.doubleZeroReward2zRaw), row.doubleZeroDecimals),
+      row.doubleZeroReward2zRaw,
+      row.doubleZeroRewardStatus,
+      row.doubleZeroPublisher2z.toFixed(row.doubleZeroDecimals ?? 8),
+      row.doubleZeroShredOracle2z.toFixed(row.doubleZeroDecimals ?? 8),
+      row.doubleZeroRewardTxCount,
+      // Labels may contain spaces; semicolon-separated and never commas.
+      row.doubleZeroRewardLabels,
+      row.doubleZeroUnclassifiedInflow2z.toFixed(row.doubleZeroDecimals ?? 8),
+      row.doubleZeroUnclassifiedOutflow2z.toFixed(row.doubleZeroDecimals ?? 8),
       row.blockFeeRewardSol.toFixed(9),
     ].join(","),
   );
@@ -1366,10 +1588,16 @@ async function main() {
   opts.rpcUrl = operator.rpcUrl;
   opts.voteAccount = operator.voteAccount;
   const voteAccount = operator.voteAccount;
-  const result = await collectRows(opts, voteAccount);
+  const result = await collectRows(opts, voteAccount, operator.identity);
+  const { epochs: _doubleZeroEpochs, ...doubleZeroScan } = result.doubleZero;
   const payload = {
     voteAccount,
     ...result,
+    doubleZero: doubleZeroScan,
+    ...sourceActivity(result.rows, { currentEpoch: result.currentEpoch, hasMarinadeBond: result.hasMarinadeBond }),
+    sourceActivityRule: SOURCE_ACTIVITY_RULE,
+    doubleZeroDefinition: DOUBLEZERO_DEFINITION,
+    doubleZeroNotes: doubleZeroNotes(result.rows, result.doubleZero.error),
     rows: result.rows.map(withDeprecatedAliases),
     totals: withDeprecatedAliases(totals(result.rows)),
     blockFeeDefinition: BLOCK_FEE_DEFINITION,
@@ -1381,7 +1609,7 @@ async function main() {
   if (opts.format === "json") console.log(JSON.stringify(payload, null, 2));
   else if (opts.format === "csv") {
     // CSV has no place for scope notes; keep them off stdout.
-    for (const note of [...unavailableEpochsNote(result.requestedFirstEpoch, result.firstEpoch, result.lastEpoch), ...bamBoostIdentityNote(result.rows), ...vatNotes(result.rows)]) console.error(note);
+    for (const note of [...unavailableEpochsNote(result.requestedFirstEpoch, result.firstEpoch, result.lastEpoch), ...bamBoostIdentityNote(result.rows), ...vatNotes(result.rows), ...doubleZeroNotes(result.rows, result.doubleZero.error)]) console.error(note);
     console.log(renderCsv(result.rows, result.hasMarinadeBond));
   } else console.log(renderMarkdown({ voteAccount, ...result }));
 }

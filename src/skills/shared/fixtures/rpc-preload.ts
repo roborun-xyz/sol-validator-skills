@@ -17,6 +17,9 @@ globalThis.fetch=Object.assign(async (_input:Parameters<typeof fetch>[0], init?:
  if(request.method==='getGenesisHash') result=process.env.FIXTURE_WRONG_NETWORK?'testnet':MAINNET_GENESIS;
  else if(request.method==='getVoteAccounts') result={current:[{votePubkey:'So11111111111111111111111111111111111111112',nodePubkey:'11111111111111111111111111111111'}],delinquent:[]};
  else if(request.method==='getEpochInfo') result={epoch:101};
+ else if(request.method==='getEpochSchedule') result={slotsPerEpoch:432000,firstNormalEpoch:0,firstNormalSlot:0};
+ else if(request.method==='getAccountInfo') result={value:{owner:'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',data:{parsed:{type:'mint',info:{decimals:8}}}}};
+ else if(request.method==='getTokenAccountsByOwner') result={value:[]};
  else throw new Error('Unexpected fixture RPC method');
  return new Response(JSON.stringify({jsonrpc:'2.0',id:request.id,result}));
 },{preconnect:fetch.preconnect});
