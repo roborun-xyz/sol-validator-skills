@@ -17,7 +17,10 @@ import {
   vatNotes,
   ALPENGLOW_FIRST_EPOCH,
   withDeprecatedAliases,
+  sourceActivity,
+  doubleZeroFields,
 } from "./revenue";
+import { emptyDoubleZeroEpoch } from "./doublezero";
 
 const BAM_PROGRAM = "BoostxbPp2ENYHGcTLYt1obpcY13HE4NojdqNWdzqSSb";
 const CLAIM_STATUS_DISCRIMINATOR = Buffer.from([
@@ -204,10 +207,12 @@ describe("BAM Boost identity resolution", () => {
 
 describe("Markdown layout", () => {
   const columns = (line: string) => line.split("|").length - 2;
+  // Every optional SOL source has activity, so every optional column is shown.
+  const active = { jitoRewardSol: 0.1, votingCompensationSol: 0.1, votingFeeSol: 0.1 };
 
   test("the main table stays narrow and the rate timestamps move to the detail table", () => {
     const row = {
-      ...totals([]), epoch: 100, jitoCommissionBps: 800, bamBoostClaimEpoch: 101,
+      ...totals([]), ...active, epoch: 100, jitoCommissionBps: 800, bamBoostClaimEpoch: 101,
       bamBoostJitoSolToSolRate: 1.304624952, bamBoostRateTimestampUtc: "2026-10-04T23:07:59Z", bamBoostRateTimestampLocal: "2026-10-04T16:07:59-07:00",
       bamBoostAllocationStatus: "allocated" as const, bamBoostClaimStatus: "claimed" as const,
     };
@@ -227,7 +232,7 @@ describe("Markdown layout", () => {
   });
 
   test("a Marinade bond adds exactly one column to the main table", () => {
-    const row = { ...totals([]), epoch: 100, marinadeBondPaymentSol: 2, marinadeBondPaymentStatus: "paid" as const };
+    const row = { ...totals([]), ...active, epoch: 100, bamBoostAllocationStatus: "allocated" as const, marinadeBondPaymentSol: 2, marinadeBondPaymentStatus: "paid" as const };
     const md = renderMarkdown({ voteAccount: TEST_VOTE, currentEpoch: 101, firstEpoch: 100, lastEpoch: 100, rows: [row], hasMarinadeBond: true, marinadeBondAccounts: [] });
     const [header, , body] = md.split("\n").filter(line => line.startsWith("| Epoch") || line.startsWith("|---") || line.startsWith("| 100 |"));
     expect(columns(header!)).toBe(13);
@@ -340,5 +345,73 @@ describe("Alpenglow VAT", () => {
     expect(md).toContain("(missing, PROVISIONAL) ADMISSION FAILURE");
     expect(md).toContain("- VAT (attributed to the debit epoch) (PROVISIONAL");
     expect(md).toContain("Net revenue (PROVISIONAL: VAT missing or unverified for some epochs)");
+  });
+});
+
+describe("optional source columns", () => {
+  const base = { ...totals([]), bamBoostAllocationStatus: "not_allocated" as const, doubleZeroRewardStatus: "none" as const, doubleZeroDecimals: 8 };
+  const render = (rows: ReturnType<typeof totals>[], currentEpoch = 1069) =>
+    renderMarkdown({ voteAccount: TEST_VOTE, currentEpoch, firstEpoch: rows[0]!.epoch, lastEpoch: rows.at(-1)!.epoch, rows, hasMarinadeBond: false, marinadeBondAccounts: [] });
+  const mainHeader = (md: string) => md.split("\n").find((line) => line.startsWith("| Epoch | Stake SOL"))!;
+
+  test("a validator without DoubleZero or BAM hides those columns and says so", () => {
+    const rows = [{ ...base, epoch: 1067, jitoRewardSol: 1 }, { ...base, epoch: 1068, bamBoostAllocationStatus: "not_published" as const }];
+    const md = render(rows, 1068);
+    expect(sourceActivity(rows, { currentEpoch: 1068, hasMarinadeBond: false }).omittedSources)
+      .toEqual(["bamBoost", "votingCompensation", "voteTxFees", "marinadeBond", "doubleZero"]);
+    expect(mainHeader(md)).toBe("| Epoch | Stake SOL | Block Fees | Commission | Jito Commission | Gross SOL | VAT | Net SOL | Blocks |");
+    expect(md).toContain("Omitted as having no activity in epochs `1067-1068`: BAM Boost, voting compensation, vote transaction fees, Marinade bond, DoubleZero 2Z rewards.");
+    expect(md).not.toContain("BAM Boost allocated");
+    expect(md).not.toContain("JitoSOL/SOL");
+    expect(md).not.toContain("| Receipt Epoch");
+    expect(md).not.toContain("DoubleZero 2Z received");
+    // CSV keeps a stable column set regardless of activity.
+    const csv = renderCsv(rows, false).split("\n")[0]!.split(",");
+    expect(csv).toContain("bam_boost_allocated_jitosol");
+    expect(csv).toContain("double_zero_reward_2z");
+  });
+
+  test("BAM allocated only in an earlier epoch of the window keeps BAM columns", () => {
+    const rows = [{ ...base, epoch: 1060, bamBoostAllocationStatus: "allocated" as const }, { ...base, epoch: 1061 }];
+    const md = render(rows);
+    expect(mainHeader(md)).toContain("| BAM Boost SOL Eq. |");
+    expect(md).toContain("BAM Boost allocated");
+    expect(md).toContain("| BAM Status |");
+  });
+
+  test("unknown data is never hidden as inactive", () => {
+    const rows = [
+      { ...base, epoch: 1066, bamBoostAllocationStatus: "not_published" as const, ...doubleZeroFields(undefined, null) },
+      { ...base, epoch: 1067, bamBoostAllocationStatus: "identity_missing" as const, doubleZeroRewardStatus: "unavailable" as const },
+    ];
+    const { activeSources } = sourceActivity(rows, { currentEpoch: 1068, hasMarinadeBond: false });
+    expect(activeSources).toEqual(["bamBoost", "doubleZero"]);
+    const md = renderMarkdown({ voteAccount: TEST_VOTE, currentEpoch: 1068, firstEpoch: 1066, lastEpoch: 1067, rows, hasMarinadeBond: false, marinadeBondAccounts: [], doubleZero: { error: "RPC failed" } });
+    expect(md).toContain("| Receipt Epoch |");
+    expect(md).toContain("DoubleZero 2Z rewards are unavailable for epoch(s) `1066, 1067` (RPC failed); they are unknown, not zero.");
+    expect(md).toContain("(INCOMPLETE: unavailable epochs listed above)");
+    expect(mainHeader(md)).toContain("BAM Boost SOL Eq.");
+  });
+
+  test("2Z receipts are a separate token line and never change gross or net", () => {
+    const received = { ...emptyDoubleZeroEpoch(1066, "received"), receivedRaw: 11_679_758_700n, publisherRaw: 11_679_758_700n, publisherTxCount: 14, publisherLabels: ["2026-8"] };
+    const rows = [
+      { ...base, epoch: 1066, grossRevenueSol: 2, netRevenueSol: 1, ...doubleZeroFields(received, 8) },
+      { ...base, epoch: 1067, grossRevenueSol: 2, netRevenueSol: 1, ...doubleZeroFields(emptyDoubleZeroEpoch(1067, "none"), 8) },
+    ];
+    const total = totals(rows);
+    expect(total.grossRevenueSol).toBe(4);
+    expect(total.netRevenueSol).toBe(2);
+    expect(total.doubleZeroReward2zRaw).toBe("11679758700");
+    expect(rows[0]!.doubleZeroSources?.publisher).toEqual({ amount2z: 116.797587, amountRaw: "11679758700", txCount: 14, rewardMonths: ["2026-8"] });
+    const md = render(rows);
+    expect(md).toContain("| 1066 | 116.79758700 | received | 116.79758700 | 0.00000000 | publisher 2026-8 | 0.00000000/0.00000000 |");
+    expect(md).toContain("- DoubleZero 2Z received (receipt epochs; separate token line, NOT in gross or net): `116.79758700 2Z`");
+    const csv = renderCsv(rows, false).split("\n").map((line) => line.split(","));
+    expect(csv[0]?.length).toBe(csv[1]?.length);
+    expect(csv[1]?.[csv[0]!.indexOf("double_zero_reward_2z")]).toBe("116.79758700");
+    expect(csv[1]?.[csv[0]!.indexOf("double_zero_reward_2z_raw")]).toBe("11679758700");
+    expect(csv[1]?.[csv[0]!.indexOf("double_zero_reward_status")]).toBe("received");
+    expect(csv[0]?.at(-1)).toBe("voting_reward_sol");
   });
 });
