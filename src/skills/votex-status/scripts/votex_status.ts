@@ -6,7 +6,8 @@ import {
   decodeVaultEpochInfo, votexStatsUrl, assertUsdcVoteBuys, NonUsdcVoteBuyError, type VaultEpochInfo as EpochInfo,
 } from "../../shared/votex-accounts";
 
-import { base58Encode, base58Decode } from "../../shared/base58";
+import { base58Decode } from "../../shared/base58";
+import { gaugeQuarry, quarryTokenMint, normalizeGaugeName } from "../../shared/vault-gauges";
 import { fetchResponse, fetchJson } from "../../shared/http";
 import { localTimeZone } from "../../shared/time";
 
@@ -157,9 +158,8 @@ async function resolveGaugeNames(gauges: string[]): Promise<Map<string, NameReso
         const encoded = account.value?.data?.[0];
         if (!encoded) return;
         const data = Uint8Array.from(Buffer.from(encoded, "base64"));
-        if (data.length < 72) return;
-
-        const quarry = base58Encode(data.subarray(40, 72));
+        const quarry = gaugeQuarry(data);
+        if (!quarry) return;
         const quarryAccount = await rpc<{ value: { data: [string, string] } | null }>("getAccountInfo", [
           quarry,
           { encoding: "base64", commitment: "confirmed" },
@@ -167,14 +167,12 @@ async function resolveGaugeNames(gauges: string[]): Promise<Map<string, NameReso
         const quarryEncoded = quarryAccount.value?.data?.[0];
         if (!quarryEncoded) return;
         const quarryData = Uint8Array.from(Buffer.from(quarryEncoded, "base64"));
-        if (quarryData.length < 72) return;
-
-        const tokenMint = base58Encode(quarryData.subarray(40, 72));
+        const tokenMint = quarryTokenMint(quarryData);
+        if (!tokenMint) return;
         let name = "";
         try {
           const asset = await rpc<any>("getAsset", { id: tokenMint });
-          const metadataName = asset?.content?.metadata?.name;
-          if (typeof metadataName === "string") name = metadataName.trim();
+          name = normalizeGaugeName(asset?.content?.metadata?.name);
         } catch {
           // getAsset is a DAS extension (Helius and a few others). Without it
           // the gauge is still listed by address and token mint, just unnamed.
