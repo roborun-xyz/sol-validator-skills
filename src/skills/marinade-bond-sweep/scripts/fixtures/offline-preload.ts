@@ -64,14 +64,19 @@ Bun.spawn = ((command: string[], options?: {env?: Record<string, string | undefi
       stderr = providerError;
       exitCode = 1;
     } else {
+      // validator-bonds 3.0.0 prints an open withdraw request as the request account object.
+      const openRequest = mode === "open-withdraw-request";
       stdout = JSON.stringify({
         programId: "vBoNdEvzMrSai7is21XgVYik65mqtaKXuSdMBJ1xkW4", publicKey: "fixture-bond",
         account: { voteAccount: vote, authority: identity },
         voteAccount: { nodePubkey: identity, authorizedWithdrawer: "fixture-withdrawer" },
-        amountOwned: "10 SOL", amountToWithdraw: "0 SOL", withdrawRequest: "<NOT EXISTING>",
+        amountOwned: "10 SOLs", amountToWithdraw: openRequest ? "4 SOLs" : "0 SOL",
+        withdrawRequest: openRequest
+          ? { publicKey: "fixture-withdraw-request", account: { requestedAmount: "4 SOLs", withdrawnAmount: "0 SOL" } }
+          : "<NOT EXISTING>",
       });
     }
-  } else if (command[0] === "validator-bonds" && command.includes("--version")) stdout = "2.6.0";
+  } else if (command[0] === "validator-bonds" && command.includes("--version")) stdout = mode === "old-cli-version" ? "2.6.0" : "3.0.0";
   else if (command[0] === "validator-bonds" && command.includes("--help")) stdout = "--simulate --confirmation-finality --amount --from";
   else {
     process.stderr.write("UNEXPECTED_MUTATION_ATTEMPT\n");

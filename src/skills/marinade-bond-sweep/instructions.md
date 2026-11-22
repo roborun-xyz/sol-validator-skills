@@ -2,7 +2,7 @@
 name: marinade-bond-sweep
 description: Keep a Solana mainnet validator's vote account funded for Alpenglow's per-epoch VAT, then sweep remaining vote-account and identity surplus into its existing Marinade Validator Bond using keypairs held on the local operator machine. Use when funding a validator's Marinade bond while retaining a vote-account reserve (default 3 SOL) and 0.1 SOL in the identity.
 license: MIT
-compatibility: Requires Bun 1.3.3, Node.js >=20.18.0, Solana CLI, validator-bonds CLI 2.6.0 and a mainnet RPC URL. Execution requires operator-owned local signers.
+compatibility: Requires Bun 1.3.3, Node.js >=20.18.0, Solana CLI, validator-bonds CLI 3.0.0 and a mainnet RPC URL. Execution requires operator-owned local signers.
 metadata:
   created: "2026-08-24"
   last_updated: "2026-11-21"
@@ -16,14 +16,14 @@ Keep a mainnet validator's vote account funded, then sweep the remaining vote-ac
 
 ## Local prerequisites
 
-Install the repository's Bun dependencies, and ensure `solana` and `solana-keygen` are available in the local runtime. Solana CLI 3.1.9 is the locally checked reference; inspect withdrawal/confirmation flags for other releases before signing. The executor requires validator-bonds CLI 2.6.0 and Node.js >=20.18.0 on PATH (the pinned CLI uses a Node interpreter even when installed with Bun):
+Install the repository's Bun dependencies, and ensure `solana` and `solana-keygen` are available in the local runtime. Solana CLI 3.1.9 is the locally checked reference; inspect withdrawal/confirmation flags for other releases before signing. The executor requires validator-bonds CLI 3.0.0 and Node.js >=20.18.0 on PATH (the pinned CLI uses a Node interpreter even when installed with Bun):
 
 ```bash
-bun add --global @marinade.finance/validator-bonds-cli@2.6.0
+bun add --global @marinade.finance/validator-bonds-cli@3.0.0
 validator-bonds --version
 ```
 
-Ensure the Bun global binary directory is on PATH. Preflight checks required `fund-bond-sol` flags and refuses a different validator-bonds version. No local signers are needed to install tools or view `--help`.
+Ensure the Bun global binary directory is on PATH. Preflight checks required `fund-bond-sol` flags and refuses any validator-bonds version other than exactly `3.0.0`, the only release checked against this executor; upgrade an older install with the command above. No local signers are needed to install tools or view `--help`.
 
 ## Why the vote account keeps a reserve (Alpenglow)
 
@@ -35,7 +35,7 @@ This skill reverses the old priority: the vote account is kept at a reserve firs
 
 - Apply [RPC setup and selection](../shared/runtime.md#discover-operator-configuration). Both planner and executor accept `--rpc`, `--config`, and `--profile`; never print or commit API keys.
 - Operate only on an existing bond. Never initialize, configure, withdraw from, or otherwise change a bond.
-- The executor accepts only a bond whose authority is the validator identity and whose withdrawal state is empty; any other bond is rejected in preflight. Do not work around that check for a bond with a separate authority.
+- The executor accepts only a bond whose authority is the validator identity and whose withdrawal state is empty (no withdraw-request account and a zero withdrawable amount); any other bond is rejected in preflight, and the rejection names the withdraw-request account and its amounts. Do not work around that check for a bond with a separate authority.
 - Vote reserve: default `3 SOL`, set with `--vote-reserve-sol` on both planner and executor. Planner and executor refuse any reserve below `rent-exempt minimum + 0.8 SOL VAT + 0.1 SOL margin`. The reserve is part of the approval fingerprint.
 - Identity: the reserve is a fixed `0.1 SOL`, with no further floor or headroom; under Alpenglow the identity pays no vote fees and the separate fee payer pays every transaction fee. Identity surplus is `balance - 0.1 SOL` when positive, otherwise zero. An identity at or below `0.1 SOL` contributes nothing.
 - Step 1, vote top-up: when the finalized vote balance is below the reserve, move `min(reserve - vote balance, identity surplus)` from the identity to the vote account with a plain System transfer signed by the identity (depositing into a vote account needs no vote authority). If the identity surplus cannot cover the deficit, the plan is `top-up-partial` and reports the remaining `voteShortfall`; execution then also requires `--accept-vote-shortfall`, given only after the operator explicitly accepts the shortfall. With no identity surplus the plan is `shortfall-no-surplus`: nothing moves, and the shortfall must be reported prominently because the validator risks not being admitted at the next epoch start.

@@ -11,6 +11,7 @@ import {
   buildVoteWithdrawTransaction,
   calculateExecutionWithdrawal,
   calculateFundingAfterVote,
+  describeOpenWithdrawal,
   explicitSolAmount,
   formatSol,
   matchFundingTransaction,
@@ -130,6 +131,27 @@ describe("approval gate", () => {
     expect(approvalFingerprint(approvedState)).not.toBe(
       approvalFingerprint({ ...approvedState, approvedCeilingLamports: "10000000001" }),
     );
+  });
+});
+
+describe("bond withdrawal state", () => {
+  test("is empty only without a request and with a zero withdrawable amount", () => {
+    expect(describeOpenWithdrawal({ withdrawRequest: "<NOT EXISTING>", amountToWithdraw: "0 SOL" })).toBeUndefined();
+    // Zero is compared as lamports, not as the exact string the CLI happens to print.
+    expect(describeOpenWithdrawal({ withdrawRequest: "<NOT EXISTING>", amountToWithdraw: "0 SOLs" })).toBeUndefined();
+    expect(describeOpenWithdrawal({ withdrawRequest: "<NOT EXISTING>", amountToWithdraw: "0.000000000 SOL" })).toBeUndefined();
+  });
+
+  test("reports a nonzero, unparseable or requested withdrawal as open", () => {
+    expect(describeOpenWithdrawal({ withdrawRequest: "<NOT EXISTING>", amountToWithdraw: "1.5 SOLs" })).toContain("amount to withdraw 1.5 SOLs");
+    expect(describeOpenWithdrawal({ withdrawRequest: "<NOT EXISTING>", amountToWithdraw: "<ALL>" })).toContain("<ALL>");
+    expect(describeOpenWithdrawal({ withdrawRequest: "request-as-text", amountToWithdraw: "0 SOL" })).toContain("withdraw request request-as-text");
+    const open = describeOpenWithdrawal({
+      withdrawRequest: { publicKey: "request", account: { requestedAmount: "4 SOLs", withdrawnAmount: "1 SOL" } },
+      amountToWithdraw: "0 SOL",
+    });
+    expect(open).toBe("withdraw request request (requested 4 SOLs, withdrawn 1 SOL); amount to withdraw 0 SOL");
+    expect(describeOpenWithdrawal({ withdrawRequest: {}, amountToWithdraw: "0 SOL" })).toContain("<unknown account>");
   });
 });
 

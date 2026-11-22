@@ -31,6 +31,9 @@ const MINIMUM_FEE_PAYER_LAMPORTS = 1_000_000n;
 // operations may still debit it between reads. The allowance is far below the 0.1 SOL
 // vote-withdrawal threshold, so it cannot hide a withdrawal that is not yet visible.
 const IDENTITY_FEE_DRIFT_ALLOWANCE_LAMPORTS = 10_000_000n;
+// The only validator-bonds CLI release whose flags and `show-bond` JSON were checked against
+// this executor. Any other version is refused in preflight.
+export const VALIDATOR_BONDS_CLI_VERSION = "3.0.0";
 const EXPECTED_BONDS_PROGRAM = "vBoNdEvzMrSai7is21XgVYik65mqtaKXuSdMBJ1xkW4";
 
 const repoRoot = resolve(import.meta.dir, "../../../..");
@@ -59,7 +62,13 @@ type BondJson = {
   amountAtSettlements: string;
   numberSettlementStakeAccounts: number;
   amountToWithdraw: string;
-  withdrawRequest: string;
+  /** `"<NOT EXISTING>"` without a request; the request account as an object when one is open. */
+  withdrawRequest: string | WithdrawRequestJson;
+};
+
+type WithdrawRequestJson = {
+  publicKey?: string;
+  account?: { requestedAmount?: string; withdrawnAmount?: string };
 };
 
 type CliArgs = {
@@ -294,7 +303,9 @@ async function getTooling(): Promise<{ version: string; help: string }> {
     runCommand(["validator-bonds", "--version"], "validator-bonds --version"),
     runCommand(["validator-bonds", "fund-bond-sol", "--help"], "validator-bonds fund-bond-sol --help"),
   ]);
-  if (version.stdout.trim() !== "2.6.0") throw new Error("This executor requires validator-bonds CLI 2.6.0; install the documented pinned version before preflight");
+  if (version.stdout.trim() !== VALIDATOR_BONDS_CLI_VERSION) {
+    throw new Error(`This executor requires validator-bonds CLI ${VALIDATOR_BONDS_CLI_VERSION}; install the documented pinned version before preflight`);
+  }
   for (const requiredFlag of ["--simulate", "--confirmation-finality", "--amount", "--from"]) {
     if (!help.stdout.includes(requiredFlag)) {
       throw new Error(`validator-bonds fund-bond-sol help is missing ${requiredFlag}`);
@@ -308,9 +319,25 @@ function validateBond(bond: BondJson, args: CliArgs): void {
   if (bond.account.voteAccount !== args.voteAccount) throw new Error("bond vote-account mismatch");
   if (bond.account.authority !== args.identity) throw new Error("bond authority mismatch");
   if (bond.voteAccount?.nodePubkey !== args.identity) throw new Error("bond live identity mismatch");
-  if (bond.withdrawRequest !== "<NOT EXISTING>" || bond.amountToWithdraw !== "0 SOL") {
-    throw new Error(`bond has an open withdrawal state: ${bond.withdrawRequest}; ${bond.amountToWithdraw}`);
-  }
+  const openWithdrawal = describeOpenWithdrawal(bond);
+  if (openWithdrawal) throw new Error(`bond has an open withdrawal state: ${openWithdrawal}`);
+}
+
+/**
+ * Describes a bond's open withdrawal state, or returns undefined when it has none: no
+ * withdraw-request account and a withdrawable amount that parses to zero lamports. An
+ * amount that cannot be parsed (for example `<ALL>`) counts as open.
+ */
+export function describeOpenWithdrawal(bond: Pick<BondJson, "withdrawRequest" | "amountToWithdraw">): string | undefined {
+  const request = bond.withdrawRequest;
+  let withdrawable: bigint | undefined;
+  try { withdrawable = parseSolLamports(String(bond.amountToWithdraw)); } catch { withdrawable = undefined; }
+  if (request === "<NOT EXISTING>" && withdrawable === 0n) return undefined;
+  const requestText =
+    request === null || typeof request !== "object"
+      ? `withdraw request ${String(request)}`
+      : `withdraw request ${request.publicKey ?? "<unknown account>"} (requested ${request.account?.requestedAmount ?? "<unknown>"}, withdrawn ${request.account?.withdrawnAmount ?? "<unknown>"})`;
+  return `${requestText}; amount to withdraw ${String(bond.amountToWithdraw)}`;
 }
 
 export function approvalFingerprint(input: ApprovalFingerprintInput): string {

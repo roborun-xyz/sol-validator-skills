@@ -58,6 +58,29 @@ test("executor rejects impossible sweeps in read-only and approved preflight bef
   });
 });
 
+test("executor refuses a validator-bonds CLI other than the pinned 3.0.0", async () => {
+  await withSignerPaths(async (args) => {
+    const result = await run("execute.ts", "old-cli-version", args);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("requires validator-bonds CLI 3.0.0");
+    expect(result.stdout).toBe("");
+    expect(result.stderr).not.toContain("UNEXPECTED_MUTATION_ATTEMPT");
+    const accepted = JSON.parse((await run("execute.ts", "safe-plan", args)).stdout);
+    expect(accepted.validatorBondsVersion).toBe("3.0.0");
+  });
+});
+
+test("executor rejects a bond with an open withdraw request and names the request", async () => {
+  await withSignerPaths(async (args) => {
+    const result = await run("execute.ts", "open-withdraw-request", args);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("open withdrawal state: withdraw request fixture-withdraw-request (requested 4 SOLs, withdrawn 0 SOL); amount to withdraw 4 SOLs");
+    expect(result.stderr).not.toContain("[object Object]");
+    expect(result.stdout).toBe("");
+    expect(result.stderr).not.toContain("UNEXPECTED_MUTATION_ATTEMPT");
+  });
+});
+
 test("executor rejects a vote reserve below rent + Alpenglow VAT before any mutation", async () => {
   await withSignerPaths(async (args) => {
     const result = await run("execute.ts", "safe-plan", [...args, "--vote-reserve-sol", "0.5"]);
