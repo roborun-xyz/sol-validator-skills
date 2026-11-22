@@ -21,7 +21,8 @@ Bun.spawn = ((command: string[], options?: {env?: Record<string, string | undefi
   if (command[1]?.endsWith("/plan.ts")) {
     // Deliberately model an older or substituted planner to test the executor's own preflight.
     const safePlan = mode === "safe-plan" || mode === "planner-rpc-check";
-    const balance = safePlan ? 5_000_000_000n : 4_000_000_000n;
+    // Exactly at the 0.1 SOL identity reserve, or below it for the impossible plan.
+    const balance = safePlan ? 100_000_000n : 50_000_000n;
     if (mode === "planner-rpc-check") {
       const environment = options?.env ?? {};
       const config = validateConfig(JSON.parse(readFileSync(environment.VALIDATOR_OPS_CONFIG!, "utf8")));
@@ -36,13 +37,13 @@ Bun.spawn = ((command: string[], options?: {env?: Record<string, string | undefi
       voteReserveLamports: String(reserve), voteReserveSol: reserveSol, minimumVoteReserveLamports: "927000000",
     };
     if (mode === "partial-top-up-plan") {
-      // Vote 1 SOL below a 3 SOL reserve; identity 6 SOL has only 0.999 SOL surplus.
+      // Vote 1 SOL below a 3 SOL reserve; identity 1 SOL has only 0.9 SOL surplus.
       stdout = JSON.stringify({
-        ...common, identityBalanceLamports: "6000000000", voteBalanceLamports: "1000000000",
-        voteAction: "top-up-partial", voteTopUpLamports: "999000000", voteTopUpSol: "0.999000000",
-        voteShortfallLamports: "1001000000", voteShortfallSol: "1.001000000", voteTransferLamports: "0",
-        identityAction: "fund-bond", identityTransferLamports: "0", projectedIdentityAfterVoteLamports: "5001000000",
-        bondFundLamports: "0", expectedFinalIdentityLamports: "5001000000",
+        ...common, identityBalanceLamports: "1000000000", voteBalanceLamports: "1000000000",
+        voteAction: "top-up-partial", voteTopUpLamports: "900000000", voteTopUpSol: "0.900000000",
+        voteShortfallLamports: "1100000000", voteShortfallSol: "1.100000000", voteTransferLamports: "0",
+        identityAction: "fund-bond", identityTransferLamports: "0", projectedIdentityAfterVoteLamports: "100000000",
+        bondFundLamports: "0", expectedFinalIdentityLamports: "100000000",
       });
     } else {
       // Vote 5 SOL above a 3 SOL reserve: withdraw exactly the 2 SOL excess.

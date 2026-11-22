@@ -10,9 +10,10 @@ import { resolveRpc, rpcOptions, rpcCall as rpc } from "../../shared/operator-co
 
 // Smallest vote-account excess worth a withdrawal transaction.
 export const VOTE_WITHDRAW_THRESHOLD = 100_000_000n;
-export const IDENTITY_HARD_FLOOR = 5n * LAMPORTS_PER_SOL;
-// Hard floor plus headroom for identity-signed operations; the fee payer pays sweep fees.
-export const IDENTITY_EXECUTION_RESERVE = 5_001_000_000n;
+// The only identity floor: every sweep leaves at least 0.1 SOL in the identity. There is no
+// extra headroom, because the separate fee payer pays every fee and amounts are lamport-exact;
+// any drift below the reserve stops the run before the next submission.
+export const IDENTITY_RESERVE = 100_000_000n;
 // Alpenglow validator admission tax debited from the vote account at each epoch start.
 export const ALPENGLOW_VAT_LAMPORTS = 800_000_000n;
 // Required margin above rent exemption plus one epoch's VAT for any configured vote reserve.
@@ -113,9 +114,9 @@ export function parseSolAmount(value: string, label = "SOL amount"): bigint {
   return BigInt(match[1]) * LAMPORTS_PER_SOL + BigInt((match[2] ?? "").padEnd(9, "0") || "0");
 }
 
-/** Identity lamports above the execution reserve; zero below it. */
+/** Identity lamports above the 0.1 SOL reserve; zero at or below it. */
 export function identitySurplus(identityBalance: bigint): bigint {
-  return identityBalance > IDENTITY_EXECUTION_RESERVE ? identityBalance - IDENTITY_EXECUTION_RESERVE : 0n;
+  return identityBalance > IDENTITY_RESERVE ? identityBalance - IDENTITY_RESERVE : 0n;
 }
 
 /** Top-up that restores the vote reserve from identity surplus: min(deficit, surplus). */
@@ -143,12 +144,12 @@ export function calculateActions(
   assertVoteReserve(voteReserve, voteRent);
 
   const identityAction: IdentityAction =
-    identityBalance < IDENTITY_HARD_FLOOR
+    identityBalance < IDENTITY_RESERVE
       ? "skip-below-threshold"
-      : identityBalance <= IDENTITY_EXECUTION_RESERVE
+      : identityBalance === IDENTITY_RESERVE
         ? "no-op-at-target"
         : "fund-bond";
-  const surplus = identityAction === "fund-bond" ? identitySurplus(identityBalance) : 0n;
+  const surplus = identitySurplus(identityBalance);
 
   let voteAction: VoteAction;
   let voteTopUp = 0n;
@@ -157,7 +158,7 @@ export function calculateActions(
   if (voteBalance < voteReserve) {
     // Step 1: the vote reserve has priority over the bond.
     const topUp = calculateTopUp(voteBalance, voteReserve, identityBalance);
-    voteTopUp = identityAction === "fund-bond" ? topUp.topUp : 0n;
+    voteTopUp = topUp.topUp;
     voteShortfall = topUp.deficit - voteTopUp;
     voteAction = voteTopUp === 0n ? "shortfall-no-surplus" : voteShortfall > 0n ? "top-up-partial" : "top-up";
   } else {
@@ -169,10 +170,13 @@ export function calculateActions(
   // Step 2: only surplus that remains after the top-up may fund the bond.
   const identityTransfer = surplus - voteTopUp;
   const projectedIdentityAfterVote = identityBalance + voteTransfer - voteTopUp;
-  const bondFund = voteTransfer + identityTransfer;
+  // Fund everything above the identity reserve. An identity that starts below the reserve
+  // contributes nothing and first keeps enough of the vote excess to reach it, so a low
+  // identity never blocks the sweep and never ends below 0.1 SOL after funding.
+  const bondFund = identitySurplus(projectedIdentityAfterVote);
   const expectedFinalIdentity = projectedIdentityAfterVote - bondFund;
-  if (voteTopUp > 0n && identityBalance - voteTopUp < IDENTITY_EXECUTION_RESERVE) {
-    throw new Error("vote top-up would leave the identity below its execution reserve");
+  if (voteTopUp > 0n && identityBalance - voteTopUp < IDENTITY_RESERVE) {
+    throw new Error("vote top-up would leave the identity below its 0.1 SOL reserve");
   }
   assertFundingFloor(projectedIdentityAfterVote, bondFund);
   return {
@@ -190,8 +194,8 @@ export function calculateActions(
 
 export function assertFundingFloor(identityBalance: bigint, funding: bigint): void {
   if (funding < 0n || identityBalance < 0n) throw new Error("funding and identity balance must be non-negative");
-  if (funding > 0n && identityBalance - funding < IDENTITY_HARD_FLOOR) {
-    throw new Error("sweep would leave the identity below the 5 SOL hard floor; no funds may be moved under this plan");
+  if (funding > 0n && identityBalance - funding < IDENTITY_RESERVE) {
+    throw new Error("sweep would leave the identity below its 0.1 SOL reserve; no funds may be moved under this plan");
   }
 }
 

@@ -19,8 +19,8 @@ import {
   calculateTopUp,
   calculateVoteExcess,
   DEFAULT_VOTE_RESERVE,
-  IDENTITY_HARD_FLOOR as IDENTITY_HARD_FLOOR_LAMPORTS,
-  IDENTITY_EXECUTION_RESERVE as IDENTITY_EXECUTION_RESERVE_LAMPORTS,
+  IDENTITY_RESERVE as IDENTITY_RESERVE_LAMPORTS,
+  identitySurplus,
   parseSolAmount,
   type Plan,
 } from "./plan";
@@ -373,8 +373,8 @@ async function runPreflight(args: CliArgs, ceilingOverride?: bigint, topUpCeilin
   if (TOP_UP_ACTIONS.has(plan.voteAction) && BigInt(plan.voteTransferLamports) !== 0n) {
     throw new Error("planner combined a vote top-up with a vote withdrawal");
   }
-  if (proposedTopUp > 0n && BigInt(plan.identityBalanceLamports) - proposedTopUp < IDENTITY_EXECUTION_RESERVE_LAMPORTS) {
-    throw new Error("proposed vote top-up would put the identity below its execution reserve");
+  if (proposedTopUp > 0n && BigInt(plan.identityBalanceLamports) - proposedTopUp < IDENTITY_RESERVE_LAMPORTS) {
+    throw new Error("proposed vote top-up would put the identity below its 0.1 SOL reserve");
   }
   assertFundingFloor(
     BigInt(plan.identityBalanceLamports) + BigInt(plan.voteTransferLamports) - proposedTopUp,
@@ -465,8 +465,9 @@ function publicPreflight(preflight: Preflight, args: CliArgs) {
       approvedTopUpCeilingLamports: preflight.approvedTopUpCeilingLamports.toString(),
       approvedTopUpCeilingSol: formatSol(preflight.approvedTopUpCeilingLamports),
       requiresShortfallAcceptance: preflight.plan.voteAction === "top-up-partial",
-      reserveLamports: IDENTITY_EXECUTION_RESERVE_LAMPORTS.toString(),
-      reserveSol: formatSol(IDENTITY_EXECUTION_RESERVE_LAMPORTS),
+      // Identity reserve: the balance every sweep leaves in the identity.
+      reserveLamports: IDENTITY_RESERVE_LAMPORTS.toString(),
+      reserveSol: formatSol(IDENTITY_RESERVE_LAMPORTS),
       warnings: [
         "Each step finalizes independently: a vote top-up or withdrawal can finalize even if later bond funding fails.",
         ...(BigInt(preflight.plan.voteShortfallLamports) > 0n
@@ -485,21 +486,19 @@ export function parseSolLamports(value: string): bigint {
 }
 
 /**
- * Bond funding after the vote step: an identity that started above its execution reserve
+ * Bond funding after the vote step: an identity that started above its 0.1 SOL reserve
  * contributes everything above that reserve (which already reflects any top-up and the
- * withdrawal); otherwise only the lamports actually withdrawn from the vote account.
+ * withdrawal); otherwise at most the lamports actually withdrawn from the vote account,
+ * less whatever the identity needs to reach its reserve.
  */
 export function calculateFundingAfterVote(
   initial: Pick<Plan, "identityAction">,
   currentIdentityLamports: bigint,
   withdrawnLamports: bigint,
 ): bigint {
-  if (initial.identityAction === "fund-bond") {
-    return currentIdentityLamports > IDENTITY_EXECUTION_RESERVE_LAMPORTS
-      ? currentIdentityLamports - IDENTITY_EXECUTION_RESERVE_LAMPORTS
-      : 0n;
-  }
-  return withdrawnLamports;
+  const surplus = identitySurplus(currentIdentityLamports);
+  if (initial.identityAction === "fund-bond") return surplus;
+  return withdrawnLamports < surplus ? withdrawnLamports : surplus;
 }
 
 /** Explicit withdrawal at execution time: the current excess, never above the approved plan amount. */
@@ -741,7 +740,7 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
       skipped.push(
         voteBefore >= voteReserveLamports
           ? "vote top-up: vote balance already reached its reserve"
-          : "vote top-up: no identity surplus above the execution reserve",
+          : "vote top-up: no identity surplus above the 0.1 SOL reserve",
       );
       stage("vote-top-up-skipped", { voteLamports: voteBefore.toString(), identityLamports: identityBefore.toString() });
     } else {
@@ -755,8 +754,8 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
           `recalculated vote top-up leaves a ${formatSol(shortfall)} SOL reserve shortfall; obtain approval with --accept-vote-shortfall; nothing was submitted`,
         );
       }
-      if (identityBefore - topUp < IDENTITY_EXECUTION_RESERVE_LAMPORTS) {
-        throw new Error("vote top-up would put the identity below its execution reserve; nothing was submitted");
+      if (identityBefore - topUp < IDENTITY_RESERVE_LAMPORTS) {
+        throw new Error("vote top-up would put the identity below its 0.1 SOL reserve; nothing was submitted");
       }
       const topUpSol = explicitSolAmount(topUp);
       stage("vote-top-up-simulation", { amountLamports: topUp.toString(), amountSol: topUpSol });
@@ -798,8 +797,8 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
           `vote top-up ${voteTopUpSignature} finalized but the finalized vote balance ${voteAfter} does not include it; no bond funding was submitted`,
         );
       }
-      if (identityAfter < IDENTITY_HARD_FLOOR_LAMPORTS) {
-        throw new Error(`identity balance ${identityAfter} after the vote top-up is below the 5 SOL hard floor`);
+      if (identityAfter < IDENTITY_RESERVE_LAMPORTS) {
+        throw new Error(`identity balance ${identityAfter} after the vote top-up is below its 0.1 SOL reserve`);
       }
       if (voteAfter < voteReserveLamports) warnings.push(`vote balance ${voteAfter} remains below its reserve ${voteReserveLamports}`);
     }
@@ -902,8 +901,8 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
       `recalculated funding ${fundingLamports} exceeds approved ceiling ${preflight.approvedCeilingLamports}`,
     );
   }
-  if (currentIdentityLamports < fundingLamports || currentIdentityLamports - fundingLamports < IDENTITY_HARD_FLOOR_LAMPORTS) {
-    throw new Error("recalculated funding would put the identity below the 5 SOL hard floor");
+  if (currentIdentityLamports < fundingLamports || currentIdentityLamports - fundingLamports < IDENTITY_RESERVE_LAMPORTS) {
+    throw new Error("recalculated funding would put the identity below its 0.1 SOL reserve");
   }
   const currentBond = (await pollReadOnly(() => getBond(args.voteAccount), 20, 1_500, fewFailures()))!;
   assertSameBond(preflight.bond, currentBond, args);
@@ -915,10 +914,10 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
   const identityAfterSimulation = await getBalance(args.identity);
   if (
     identityAfterSimulation < fundingLamports ||
-    identityAfterSimulation - fundingLamports < IDENTITY_HARD_FLOOR_LAMPORTS
+    identityAfterSimulation - fundingLamports < IDENTITY_RESERVE_LAMPORTS
   ) {
     throw new Error(
-      `after simulation, submitting ${fundingLamports} would leave ${identityAfterSimulation - fundingLamports} lamports`,
+      `after simulation, submitting ${fundingLamports} would leave ${identityAfterSimulation - fundingLamports} lamports, below the 0.1 SOL identity reserve`,
     );
   }
 
@@ -957,13 +956,13 @@ async function executeApproved(args: CliArgs): Promise<Record<string, unknown>> 
   if (!voteAtReserve) {
     warnings.push(`final vote balance ${finalVoteLamports} is below its reserve ${voteReserveLamports}; check for an epoch-start VAT debit and re-plan`);
   }
-  // The hard floor is what the funding transaction left in the identity.
+  // The identity reserve is checked against what the funding transaction left in the identity.
   const identityAfterFundingLamports =
     fundingTransaction.match.identityPostBalanceLamports === null
       ? finalIdentityLamports
       : BigInt(fundingTransaction.match.identityPostBalanceLamports);
-  if (identityAfterFundingLamports < IDENTITY_HARD_FLOOR_LAMPORTS) {
-    throw new Error(`identity balance ${identityAfterFundingLamports} after funding is below the 5 SOL hard floor`);
+  if (identityAfterFundingLamports < IDENTITY_RESERVE_LAMPORTS) {
+    throw new Error(`identity balance ${identityAfterFundingLamports} after funding is below its 0.1 SOL reserve`);
   }
   const finalBondOwnedLamports = parseSolLamports(finalBond.amountOwned);
   if (finalBondOwnedLamports - bondOwnedBeforeFundingLamports < fundingLamports) {

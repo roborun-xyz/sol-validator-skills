@@ -26,14 +26,22 @@ describe("amount handling", () => {
   });
 
   test("recalculates an above-reserve identity after the vote step", () => {
-    expect(calculateFundingAfterVote({ identityAction: "fund-bond" }, 14_967_009_320n, 4_629_251_536n)).toBe(9_966_009_320n);
-    // After a full top-up the identity sits at its execution reserve: nothing left for the bond.
-    expect(calculateFundingAfterVote({ identityAction: "fund-bond" }, 5_001_000_000n, 0n)).toBe(0n);
+    expect(calculateFundingAfterVote({ identityAction: "fund-bond" }, 14_967_009_320n, 4_629_251_536n)).toBe(14_867_009_320n);
+    // An identity below the former 5 SOL floor contributes everything above 0.1 SOL.
+    expect(calculateFundingAfterVote({ identityAction: "fund-bond" }, 2_000_000_000n, 0n)).toBe(1_900_000_000n);
+    // After a full top-up the identity sits at its 0.1 SOL reserve: nothing left for the bond.
+    expect(calculateFundingAfterVote({ identityAction: "fund-bond" }, 100_000_000n, 0n)).toBe(0n);
+    expect(calculateFundingAfterVote({ identityAction: "fund-bond" }, 99_999_999n, 0n)).toBe(0n);
   });
 
-  test("does not consume an initially below-target identity", () => {
-    expect(calculateFundingAfterVote({ identityAction: "skip-below-threshold" }, 5_972_925_600n, 1_972_925_600n)).toBe(1_972_925_600n);
-    expect(calculateFundingAfterVote({ identityAction: "no-op-at-target" }, 5_000_500_000n, 0n)).toBe(0n);
+  test("an identity that started at or below its reserve funds at most the withdrawn lamports", () => {
+    // At the reserve: exactly the withdrawal, even if the identity received other deposits.
+    expect(calculateFundingAfterVote({ identityAction: "no-op-at-target" }, 2_072_925_600n, 1_972_925_600n)).toBe(1_972_925_600n);
+    expect(calculateFundingAfterVote({ identityAction: "no-op-at-target" }, 9_000_000_000n, 1_972_925_600n)).toBe(1_972_925_600n);
+    expect(calculateFundingAfterVote({ identityAction: "no-op-at-target" }, 100_000_000n, 0n)).toBe(0n);
+    // Below the reserve (0.04 SOL before a 2 SOL withdrawal): the identity keeps 0.06 SOL of it.
+    expect(calculateFundingAfterVote({ identityAction: "skip-below-threshold" }, 2_040_000_000n, 2_000_000_000n)).toBe(1_940_000_000n);
+    expect(calculateFundingAfterVote({ identityAction: "skip-below-threshold" }, 40_000_000n, 0n)).toBe(0n);
   });
 });
 
@@ -140,7 +148,7 @@ describe("transaction parsing", () => {
           err: null,
           fee: 15_002,
           logMessages: ["Program log: Instruction: FundBond"],
-          postBalances: [26_858_640, 5_001_000_000, 1],
+          postBalances: [26_858_640, 100_000_000, 1],
         },
         transaction: {
           message: {
@@ -163,9 +171,9 @@ describe("transaction parsing", () => {
       },
       { vote: "vote", identity: "identity", bond: "bond", amountLamports: 9_964_279_320n },
     );
-    // The identity post-balance is the basis for the hard-floor check.
+    // The identity post-balance is the basis for the identity reserve check.
     expect(result).toEqual({
-      stakeAccount: "stake", blockTime: 456, slot: 123, feeLamports: 15_002, identityPostBalanceLamports: 5_001_000_000,
+      stakeAccount: "stake", blockTime: 456, slot: 123, feeLamports: 15_002, identityPostBalanceLamports: 100_000_000,
     });
   });
 });

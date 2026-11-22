@@ -14,7 +14,7 @@ import {
 const SOL = 1_000_000_000n;
 const RENT = 27_074_400n;
 const RESERVE = 3n * SOL;
-const IDENTITY_RESERVE = 5_001_000_000n;
+const IDENTITY_RESERVE = 100_000_000n;
 
 describe("vote reserve policy", () => {
   test("defaults to a 3 SOL vote reserve", () => {
@@ -57,16 +57,16 @@ describe("step 1: vote top-up from identity surplus", () => {
   });
 
   test("reports a shortfall and plans only a partial top-up when identity surplus is insufficient", () => {
-    const plan = calculateActions(1n * SOL, RENT, 6n * SOL);
+    const plan = calculateActions(1n * SOL, RENT, 1n * SOL);
     expect(plan.voteAction).toBe("top-up-partial");
-    expect(plan.voteTopUp).toBe(6n * SOL - IDENTITY_RESERVE);
-    expect(plan.voteShortfall).toBe(2n * SOL - (6n * SOL - IDENTITY_RESERVE));
+    expect(plan.voteTopUp).toBe(1n * SOL - IDENTITY_RESERVE);
+    expect(plan.voteShortfall).toBe(2n * SOL - (1n * SOL - IDENTITY_RESERVE));
     expect(plan.bondFund).toBe(0n);
     expect(plan.expectedFinalIdentity).toBe(IDENTITY_RESERVE);
   });
 
   test("reports the full deficit as shortfall when the identity has no surplus", () => {
-    for (const identity of [4n * SOL, 5n * SOL, IDENTITY_RESERVE]) {
+    for (const identity of [1n, 50_000_000n, IDENTITY_RESERVE]) {
       const plan = calculateActions(1n * SOL, RENT, identity);
       expect(plan.voteAction).toBe("shortfall-no-surplus");
       expect(plan.voteTopUp).toBe(0n);
@@ -91,13 +91,14 @@ describe("step 1: vote top-up from identity surplus", () => {
 
 describe("step 2: vote excess and identity surplus fund the bond", () => {
   test("withdraws only the excess above the vote reserve", () => {
-    const plan = calculateActions(5n * SOL, RENT, 5n * SOL);
+    const plan = calculateActions(5n * SOL, RENT, IDENTITY_RESERVE);
     expect(plan.voteAction).toBe("withdraw-excess");
     expect(plan.voteTransfer).toBe(2n * SOL);
     expect(calculateVoteExcess(5n * SOL, RESERVE)).toBe(2n * SOL);
     expect(5n * SOL - plan.voteTransfer).toBe(RESERVE);
+    expect(plan.identityAction).toBe("no-op-at-target");
     expect(plan.bondFund).toBe(2n * SOL);
-    expect(plan.expectedFinalIdentity).toBe(5n * SOL);
+    expect(plan.expectedFinalIdentity).toBe(IDENTITY_RESERVE);
   });
 
   test("honors a configured larger reserve", () => {
@@ -106,29 +107,49 @@ describe("step 2: vote excess and identity surplus fund the bond", () => {
   });
 
   test("skips an excess below the withdrawal threshold", () => {
-    const plan = calculateActions(RESERVE + 50_000_000n, RENT, 5n * SOL);
+    const plan = calculateActions(RESERVE + 50_000_000n, RENT, IDENTITY_RESERVE);
     expect(plan.voteAction).toBe("skip-below-threshold");
     expect(plan.voteTransfer).toBe(0n);
     expect(plan.bondFund).toBe(0n);
   });
 
-  test("combines vote excess and identity surplus and leaves the execution reserve", () => {
+  test("combines vote excess and identity surplus and leaves the 0.1 SOL identity reserve", () => {
     const plan = calculateActions(5n * SOL, RENT, 7n * SOL);
     expect(plan.voteTransfer).toBe(2n * SOL);
-    expect(plan.identityTransfer).toBe(1_999_000_000n);
-    expect(plan.bondFund).toBe(3_999_000_000n);
+    expect(plan.identityTransfer).toBe(6_900_000_000n);
+    expect(plan.bondFund).toBe(8_900_000_000n);
     expect(plan.expectedFinalIdentity).toBe(IDENTITY_RESERVE);
   });
 
-  test("rejects vote sweeps that would leave the original identity below 5 SOL", () => {
-    expect(() => calculateActions(5n * SOL, RENT, 4n * SOL)).toThrow("5 SOL hard floor");
-    expect(() => calculateActions(5n * SOL, RENT, 5n * SOL - 1n)).toThrow("5 SOL hard floor");
+  test("sweeps an identity below the former 5 SOL floor down to 0.1 SOL", () => {
+    const plan = calculateActions(5n * SOL, RENT, 4n * SOL);
+    expect(plan.identityAction).toBe("fund-bond");
+    expect(plan.identityTransfer).toBe(3_900_000_000n);
+    expect(plan.bondFund).toBe(5_900_000_000n);
+    expect(plan.expectedFinalIdentity).toBe(IDENTITY_RESERVE);
+    // Without vote excess the identity surplus alone funds the bond.
+    expect(calculateActions(RESERVE, RENT, 4n * SOL).bondFund).toBe(3_900_000_000n);
   });
 
-  test("treats an identity between 5 SOL and the execution reserve as a no-op", () => {
-    const plan = calculateActions(RESERVE, RENT, 5_000_500_000n);
+  test("an identity below 0.1 SOL contributes nothing and keeps enough vote excess to reach it", () => {
+    const plan = calculateActions(5n * SOL, RENT, 40_000_000n);
+    expect(plan.voteAction).toBe("withdraw-excess");
+    expect(plan.voteTransfer).toBe(2n * SOL);
+    expect(plan.identityAction).toBe("skip-below-threshold");
+    expect(plan.identityTransfer).toBe(0n);
+    expect(plan.bondFund).toBe(1_940_000_000n);
+    expect(plan.expectedFinalIdentity).toBe(IDENTITY_RESERVE);
+    // Nothing to withdraw: no mutation is planned and the identity is left as it is.
+    const idle = calculateActions(RESERVE, RENT, 40_000_000n);
+    expect(idle.bondFund).toBe(0n);
+    expect(idle.expectedFinalIdentity).toBe(40_000_000n);
+  });
+
+  test("treats an identity exactly at its reserve as a no-op", () => {
+    const plan = calculateActions(RESERVE, RENT, IDENTITY_RESERVE);
     expect(plan.identityAction).toBe("no-op-at-target");
     expect(plan.identityTransfer).toBe(0n);
-    expect(plan.expectedFinalIdentity).toBe(5_000_500_000n);
+    expect(plan.bondFund).toBe(0n);
+    expect(plan.expectedFinalIdentity).toBe(IDENTITY_RESERVE);
   });
 });

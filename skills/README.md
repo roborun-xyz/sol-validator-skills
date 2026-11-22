@@ -1,6 +1,6 @@
 ---
 created: 2026-10-08
-last_updated: 2026-10-27
+last_updated: 2026-11-21
 ---
 
 # Published skills

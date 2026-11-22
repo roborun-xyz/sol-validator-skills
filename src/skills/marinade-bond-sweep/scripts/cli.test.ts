@@ -51,7 +51,7 @@ test("executor rejects impossible sweeps in read-only and approved preflight bef
     ]]) {
       const result = await run("execute.ts", "below-floor-plan", [...args, ...extra]);
       expect(result.code).toBe(1);
-      expect(result.stderr).toContain("5 SOL hard floor");
+      expect(result.stderr).toContain("below its 0.1 SOL reserve");
       expect(result.stdout).toBe("");
       expect(result.stderr).not.toContain("UNEXPECTED_MUTATION_ATTEMPT");
     }
@@ -77,6 +77,10 @@ test("executor preflight withdraws only the vote excess and binds the reserve to
     expect(output.action.vote).toBe("withdraw-excess");
     expect(output.action.voteTransferLamports).toBe("2000000000");
     expect(output.balances.voteReserveLamports).toBe("3000000000");
+    // The identity keeps 0.1 SOL; the former 5 SOL floor no longer blocks the sweep.
+    expect(output.balances.identityLamports).toBe("100000000");
+    expect(output.approval.reserveLamports).toBe("100000000");
+    expect(output.action.proposedBondFundLamports).toBe("2000000000");
     const larger = JSON.parse((await run("execute.ts", "safe-plan", [...args, "--vote-reserve-sol", "4"])).stdout);
     expect(larger.approval.approvalId).not.toBe(output.approval.approvalId);
   });
@@ -88,7 +92,7 @@ test("partial vote top-up reports the shortfall and needs explicit acceptance be
     expect(preflight.code).toBe(0);
     const output = JSON.parse(preflight.stdout);
     expect(output.action.vote).toBe("top-up-partial");
-    expect(output.action.voteShortfallLamports).toBe("1001000000");
+    expect(output.action.voteShortfallLamports).toBe("1100000000");
     expect(output.approval.required).toBe(true);
     expect(output.approval.requiresShortfallAcceptance).toBe(true);
     expect(output.approval.warnings.join(" ")).toContain("VAT");
